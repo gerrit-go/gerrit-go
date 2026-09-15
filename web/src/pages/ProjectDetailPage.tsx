@@ -5,6 +5,7 @@ import { api, type BranchInfo, type CommitInfo, type FileEntry } from "@/lib/api
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Skeleton } from "@/components/ui/skeleton";
 import { timeAgo } from "@/lib/utils";
+import ProjectAccessPanel from "@/pages/ProjectAccessPanel";
 import {
   Table,
   TableBody,
@@ -28,7 +29,7 @@ export default function ProjectDetailPage() {
   const [error, setError] = useState("");
 
   useEffect(() => {
-    api.branches(project).then(setBranches).catch(() => setBranches([]));
+    api.branches(project).then((b) => setBranches(b ?? [])).catch(() => setBranches([]));
   }, [project]);
 
   const rev = revision || branches[0]?.name || "HEAD";
@@ -113,6 +114,7 @@ export default function ProjectDetailPage() {
         <TabsList>
           <TabsTrigger value="files">Files</TabsTrigger>
           <TabsTrigger value="commits">Commits</TabsTrigger>
+          <TabsTrigger value="access">Access</TabsTrigger>
         </TabsList>
 
         <TabsContent value="files" className="mt-3">
@@ -242,6 +244,10 @@ export default function ProjectDetailPage() {
               </Table>
             </div>
           )}
+        </TabsContent>
+
+        <TabsContent value="access" className="mt-3">
+          <ProjectAccessPanel project={project} />
         </TabsContent>
       </Tabs>
     </div>

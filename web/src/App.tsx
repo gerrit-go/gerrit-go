@@ -1,5 +1,5 @@
 import { Link, NavLink, Route, Routes, useNavigate } from "react-router-dom";
-import { GitPullRequestArrow, FolderGit2, LogOut, Search, Sun, Moon, Monitor, Check } from "lucide-react";
+import { GitPullRequestArrow, FolderGit2, LogOut, Search, Sun, Moon, Monitor, Check, Users } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useAuth } from "@/auth";
 import { useTheme, type Theme } from "@/theme";
@@ -18,6 +18,7 @@ import ChangesPage from "@/pages/ChangesPage";
 import ChangeDetailPage from "@/pages/ChangeDetailPage";
 import ProjectsPage from "@/pages/ProjectsPage";
 import ProjectDetailPage from "@/pages/ProjectDetailPage";
+import GroupsPage from "@/pages/GroupsPage";
 import LoginPage from "@/pages/LoginPage";
 
 function ThemeToggle() {
@@ -104,6 +105,20 @@ function Header() {
             <FolderGit2 className="size-4" />
             Projects
           </NavLink>
+          {user && (
+            <NavLink
+              to="/groups"
+              className={({ isActive }) =>
+                cn(
+                  "flex items-center gap-1.5 rounded-md px-3 py-1.5 text-muted-foreground transition-colors hover:text-foreground hover:bg-accent",
+                  isActive && "bg-accent text-foreground font-medium",
+                )
+              }
+            >
+              <Users className="size-4" />
+              Groups
+            </NavLink>
+          )}
         </nav>
         <form onSubmit={onSearch} className="ml-auto hidden w-full max-w-sm md:block">
           <div className="relative">
@@ -164,6 +179,7 @@ export default function App() {
           <Route path="/login" element={<LoginPage />} />
           <Route path="/projects" element={<ProjectsPage />} />
           <Route path="/projects/*" element={<ProjectDetailPage />} />
+          <Route path="/groups" element={<GroupsPage />} />
           <Route path="/c/:num" element={<ChangeDetailPage />} />
           <Route path="*" element={<NotFound />} />
         </Routes>

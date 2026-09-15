@@ -28,14 +28,24 @@ func (s *Service) BootstrapAdmin() bool {
 		return false
 	}
 	hash, _ := bcrypt.GenerateFromPassword([]byte("secret"), bcrypt.DefaultCost)
-	s.db.CreateAccount(&store.Account{
+	a := &store.Account{
 		Username:     "admin",
 		PasswordHash: string(hash),
 		FullName:     "Administrator",
 		Email:        "admin@localhost",
 		Admin:        true,
-	})
+	}
+	s.db.CreateAccount(a)
+	s.addToGroup(a.ID, "Administrators")
 	return true
+}
+
+// addToGroup places an account in a built-in group, ignoring errors (the
+// group always exists after migration seeding).
+func (s *Service) addToGroup(accountID int64, groupName string) {
+	if g, err := s.db.GetGroupByName(groupName); err == nil {
+		s.db.AddGroupMember(g.ID, accountID)
+	}
 }
 
 func (s *Service) Register(username, password, fullName, email string) (*store.Account, error) {
@@ -56,6 +66,7 @@ func (s *Service) Register(username, password, fullName, email string) (*store.A
 	if err := s.db.CreateAccount(a); err != nil {
 		return nil, err
 	}
+	s.addToGroup(a.ID, "Registered Users")
 	return a, nil
 }
 

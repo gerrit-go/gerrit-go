@@ -28,6 +28,7 @@ type Project struct {
 	Name        string    `json:"name"`
 	Description string    `json:"description,omitempty"`
 	Head        string    `json:"-"`
+	State       string    `json:"state"`
 	Created     time.Time `json:"-"`
 }
 
@@ -211,6 +212,38 @@ CREATE TABLE IF NOT EXISTS reviewers (
   account_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
   added TEXT NOT NULL,
   PRIMARY KEY (change_number, account_id)
+);
+CREATE TABLE IF NOT EXISTS groups (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL UNIQUE,
+  description TEXT NOT NULL DEFAULT '',
+  owner_group_id INTEGER NOT NULL DEFAULT 0,
+  system INTEGER NOT NULL DEFAULT 0,
+  created TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS group_members (
+  group_id INTEGER NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
+  account_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  added TEXT NOT NULL,
+  PRIMARY KEY (group_id, account_id)
+);
+CREATE TABLE IF NOT EXISTS access_rules (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  project TEXT NOT NULL,
+  ref_pattern TEXT NOT NULL,
+  permission TEXT NOT NULL,
+  group_id INTEGER NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
+  action TEXT NOT NULL DEFAULT 'ALLOW',
+  exclusive INTEGER NOT NULL DEFAULT 0,
+  min_val INTEGER NOT NULL DEFAULT 0,
+  max_val INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_access_project ON access_rules(project, permission);
+CREATE TABLE IF NOT EXISTS starred (
+  account_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  change_number INTEGER NOT NULL REFERENCES changes(number) ON DELETE CASCADE,
+  added TEXT NOT NULL,
+  PRIMARY KEY (account_id, change_number)
 );`
 	if _, err := db.Exec(schema); err != nil {
 		return err
@@ -223,6 +256,64 @@ CREATE TABLE IF NOT EXISTS reviewers (
 	} {
 		if err := addColumnIfMissing(db, "changes", col.name, col.def); err != nil {
 			return err
+		}
+	}
+	if err := addColumnIfMissing(db, "projects", "state", "state TEXT NOT NULL DEFAULT 'ACTIVE'"); err != nil {
+		return err
+	}
+	if err := seedDefaults(db); err != nil {
+		return err
+	}
+	return nil
+}
+
+// seedDefaults creates the built-in groups and the global (All-Projects,
+// project='*') access rules on first run. It is idempotent.
+func seedDefaults(db *sql.DB) error {
+	for _, g := range []struct {
+		name, desc string
+	}{
+		{"Administrators", "Built-in group of server administrators"},
+		{"Registered Users", "Built-in group of all signed-in accounts"},
+		{"Anonymous Users", "Built-in group of not-signed-in callers"},
+	} {
+		if _, err := db.Exec(
+			`INSERT INTO groups(name, description, system, created) VALUES(?,?,1,?)
+			 ON CONFLICT(name) DO NOTHING`, g.name, g.desc, now()); err != nil {
+			return err
+		}
+	}
+	// Global default rules so a fresh server is usable out of the box.
+	type rule struct {
+		ref, perm, group, action string
+		min, max                 int
+	}
+	rules := []rule{
+		{"refs/*", "read", "Administrators", "ALLOW", 0, 0},
+		{"refs/*", "read", "Anonymous Users", "ALLOW", 0, 0},
+		{"refs/*", "read", "Registered Users", "ALLOW", 0, 0},
+		{"refs/for/*", "push", "Registered Users", "ALLOW", 0, 0},
+		{"refs/*", "comment", "Registered Users", "ALLOW", 0, 0},
+		{"refs/*", "label-Code-Review", "Registered Users", "ALLOW", -1, 1},
+		{"refs/*", "label-Verified", "Registered Users", "ALLOW", -1, 1},
+		{"*", "createProject", "Registered Users", "ALLOW", 0, 0},
+	}
+	var n int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM access_rules WHERE project='*'`).Scan(&n); err != nil {
+		return err
+	}
+	if n == 0 {
+		for _, r := range rules {
+			var gid int64
+			if err := db.QueryRow(`SELECT id FROM groups WHERE name=?`, r.group).Scan(&gid); err != nil {
+				return err
+			}
+			if _, err := db.Exec(
+				`INSERT INTO access_rules(project, ref_pattern, permission, group_id, action, exclusive, min_val, max_val)
+				 VALUES('*',?,?,?,?,0,?,?)`,
+				r.ref, r.perm, gid, r.action, r.min, r.max); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
@@ -366,16 +457,20 @@ func (d *DB) DeleteSession(id string) error {
 // ---------- projects ----------
 
 func (d *DB) CreateProject(p *Project) error {
-	_, err := d.db.Exec(`INSERT INTO projects(name, description, head, created) VALUES(?,?,?,?)`,
-		p.Name, p.Description, p.Head, now())
+	state := p.State
+	if state == "" {
+		state = "ACTIVE"
+	}
+	_, err := d.db.Exec(`INSERT INTO projects(name, description, head, state, created) VALUES(?,?,?,?,?)`,
+		p.Name, p.Description, p.Head, state, now())
 	return err
 }
 
 func (d *DB) GetProject(name string) (*Project, error) {
 	p := &Project{}
 	var created string
-	err := d.db.QueryRow(`SELECT name, description, head, created FROM projects WHERE name=?`, name).
-		Scan(&p.Name, &p.Description, &p.Head, &created)
+	err := d.db.QueryRow(`SELECT name, description, head, state, created FROM projects WHERE name=?`, name).
+		Scan(&p.Name, &p.Description, &p.Head, &p.State, &created)
 	if err != nil {
 		return nil, err
 	}
@@ -384,7 +479,7 @@ func (d *DB) GetProject(name string) (*Project, error) {
 }
 
 func (d *DB) ListProjects() ([]*Project, error) {
-	rows, err := d.db.Query(`SELECT name, description, head, created FROM projects ORDER BY name`)
+	rows, err := d.db.Query(`SELECT name, description, head, state, created FROM projects ORDER BY name`)
 	if err != nil {
 		return nil, err
 	}
@@ -393,13 +488,18 @@ func (d *DB) ListProjects() ([]*Project, error) {
 	for rows.Next() {
 		p := &Project{}
 		var created string
-		if err := rows.Scan(&p.Name, &p.Description, &p.Head, &created); err != nil {
+		if err := rows.Scan(&p.Name, &p.Description, &p.Head, &p.State, &created); err != nil {
 			return nil, err
 		}
 		p.Created = parseTime(created)
 		out = append(out, p)
 	}
 	return out, rows.Err()
+}
+
+func (d *DB) SetProjectState(name, state string) error {
+	_, err := d.db.Exec(`UPDATE projects SET state=? WHERE name=?`, state, name)
+	return err
 }
 
 // ---------- changes ----------

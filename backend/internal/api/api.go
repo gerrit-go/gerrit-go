@@ -62,6 +62,17 @@ func (s *Server) routes() {
 	mux.HandleFunc("GET /projects/{name}/commits", s.handleListCommits)
 	mux.HandleFunc("GET /projects/{name}/tree", s.handleListTree)
 	mux.HandleFunc("GET /projects/{name}/file", s.handleFileContent)
+	mux.HandleFunc("GET /projects/{name}/access", s.handleGetAccess)
+	mux.HandleFunc("PUT /projects/{name}/access", s.requireAuth(s.handleSetAccess))
+
+	// Groups.
+	mux.HandleFunc("GET /groups/", s.handleListGroups)
+	mux.HandleFunc("POST /groups/", s.requireAuth(s.handleCreateGroup))
+	mux.HandleFunc("GET /groups/{id}", s.handleGetGroup)
+	mux.HandleFunc("DELETE /groups/{id}", s.requireAuth(s.handleDeleteGroup))
+	mux.HandleFunc("GET /groups/{id}/members", s.handleListGroupMembers)
+	mux.HandleFunc("PUT /groups/{id}/members/{account}", s.requireAuth(s.handleAddGroupMember))
+	mux.HandleFunc("DELETE /groups/{id}/members/{account}", s.requireAuth(s.handleDeleteGroupMember))
 
 	// Changes.
 	mux.HandleFunc("GET /changes/", s.handleListChanges)
@@ -132,6 +143,49 @@ func (s *Server) requireAuth(next http.HandlerFunc) http.HandlerFunc {
 
 func (s *Server) account(r *http.Request) *store.Account {
 	return accountFrom(r.Context())
+}
+
+// optionalAccount resolves the caller when present but does not require
+// authentication; it returns nil for anonymous requests. Used by read
+// endpoints to apply access control and private-change visibility.
+func (s *Server) optionalAccount(r *http.Request) *store.Account {
+	if acct := accountFrom(r.Context()); acct != nil {
+		return acct
+	}
+	if acct, err := s.auth.CurrentAccount(r); err == nil {
+		return acct
+	}
+	return nil
+}
+
+// forbid writes a 403 and reports false so callers can `return` early.
+func forbid(w http.ResponseWriter, perm string) bool {
+	writeErr(w, http.StatusForbidden, "permission denied: "+perm)
+	return false
+}
+
+// ensureChangeRead verifies the caller may view the change; on failure it
+// writes a 404 (to avoid leaking existence) and returns false.
+func (s *Server) ensureChangeRead(w http.ResponseWriter, r *http.Request, c *store.Change) bool {
+	if !s.canReadChange(s.optionalAccount(r), c) {
+		writeErr(w, http.StatusNotFound, "change not found")
+		return false
+	}
+	return true
+}
+
+// canReadProject reports whether the caller may browse a project at all
+// (read permission on refs/*).
+func (s *Server) canReadProject(acct *store.Account, project string) bool {
+	return s.can(acct, project, "refs/*", PermRead)
+}
+
+func (s *Server) ensureProjectRead(w http.ResponseWriter, r *http.Request, project string) bool {
+	if !s.canReadProject(s.optionalAccount(r), project) {
+		writeErr(w, http.StatusNotFound, "project not found")
+		return false
+	}
+	return true
 }
 
 func decodeJSON(r *http.Request, v any) error {
@@ -334,8 +388,18 @@ func (s *Server) gitMiddleware() http.Handler {
 				http.Error(w, "authentication required", http.StatusUnauthorized)
 				return
 			}
+			// Gate receive-pack on the right to create changes (push to
+			// refs/for/*). Per-ref direct-branch push ACL is enforced by the
+			// project's push rules during post-receive processing.
+			if !s.can(acct, project, "refs/for/master", PermPush) {
+				http.Error(w, "push not permitted", http.StatusForbidden)
+				return
+			}
 			pusher = acct
 			remoteUser = acct.Username
+		} else if !s.canReadProject(s.optionalAccount(r), project) {
+			http.Error(w, "repository not found", http.StatusNotFound)
+			return
 		}
 
 		var rw http.ResponseWriter = w
@@ -363,17 +427,27 @@ func (s *Server) handleListProjects(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	acct := s.optionalAccount(r)
 	out := make(map[string]any, len(list))
 	for _, p := range list {
+		if !s.canReadProject(acct, p.Name) {
+			continue
+		}
 		out[p.Name] = map[string]any{
 			"name":        p.Name,
 			"description": p.Description,
+			"state":       p.State,
 		}
 	}
 	writeJSON(w, http.StatusOK, out)
 }
 
 func (s *Server) handleCreateProject(w http.ResponseWriter, r *http.Request) {
+	acct := s.account(r)
+	if !s.canCapability(acct, PermCreateProject) {
+		forbid(w, PermCreateProject)
+		return
+	}
 	var req struct {
 		Name        string `json:"name"`
 		Description string `json:"description"`
@@ -391,7 +465,37 @@ func (s *Server) handleCreateProject(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, code, err.Error())
 		return
 	}
+	s.seedProjectAccess(req.Name, acct)
 	writeJSON(w, http.StatusCreated, map[string]any{"name": req.Name, "description": req.Description})
+}
+
+// seedProjectAccess creates the per-project "<name> Owners" group, adds the
+// creator, and installs the default access rules (owners may push branches,
+// submit, abandon and vote the full Code-Review/Verified range).
+func (s *Server) seedProjectAccess(project string, creator *store.Account) {
+	owners := &store.Group{Name: project + " Owners", Description: "Owners of " + project}
+	if err := s.db.CreateGroup(owners); err != nil {
+		// Group name collision: reuse the existing one.
+		if g, gerr := s.db.GetGroupByName(owners.Name); gerr == nil {
+			owners = g
+		} else {
+			return
+		}
+	}
+	if creator != nil {
+		s.db.AddGroupMember(owners.ID, creator.ID)
+	}
+	rules := []*store.AccessRule{
+		{RefPattern: "refs/heads/*", Permission: PermPush, GroupID: owners.ID, Action: "ALLOW"},
+		{RefPattern: "refs/tags/*", Permission: PermPush, GroupID: owners.ID, Action: "ALLOW"},
+		{RefPattern: "refs/heads/*", Permission: PermSubmit, GroupID: owners.ID, Action: "ALLOW"},
+		{RefPattern: "refs/heads/*", Permission: PermAbandon, GroupID: owners.ID, Action: "ALLOW"},
+		{RefPattern: "refs/*", Permission: "label-Code-Review", GroupID: owners.ID, Action: "ALLOW", Min: -2, Max: 2},
+		{RefPattern: "refs/*", Permission: "label-Verified", GroupID: owners.ID, Action: "ALLOW", Min: -1, Max: 1},
+		{RefPattern: "refs/*", Permission: PermEditTopic, GroupID: owners.ID, Action: "ALLOW"},
+		{RefPattern: "refs/*", Permission: PermEditAccess, GroupID: owners.ID, Action: "ALLOW"},
+	}
+	s.db.SetAccessRules(project, rules)
 }
 
 func (s *Server) handleGetProject(w http.ResponseWriter, r *http.Request) {
@@ -405,10 +509,16 @@ func (s *Server) handleGetProject(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, "project not found")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"name": p.Name, "description": p.Description})
+	if !s.ensureProjectRead(w, r, name) {
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"name": p.Name, "description": p.Description, "state": p.State})
 }
 
 func (s *Server) handleListBranches(w http.ResponseWriter, r *http.Request) {
+	if !s.ensureProjectRead(w, r, r.PathValue("name")) {
+		return
+	}
 	branches, err := s.git.ListBranches(r.PathValue("name"))
 	if err != nil {
 		writeErr(w, http.StatusNotFound, err.Error())
@@ -418,6 +528,9 @@ func (s *Server) handleListBranches(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleListCommits(w http.ResponseWriter, r *http.Request) {
+	if !s.ensureProjectRead(w, r, r.PathValue("name")) {
+		return
+	}
 	limit, _ := strconv.Atoi(r.URL.Query().Get("n"))
 	if limit <= 0 || limit > 200 {
 		limit = 50
@@ -431,6 +544,9 @@ func (s *Server) handleListCommits(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleListTree(w http.ResponseWriter, r *http.Request) {
+	if !s.ensureProjectRead(w, r, r.PathValue("name")) {
+		return
+	}
 	entries, err := s.git.ListTree(r.PathValue("name"), r.URL.Query().Get("revision"), r.URL.Query().Get("path"))
 	if err != nil {
 		writeErr(w, http.StatusNotFound, err.Error())
@@ -441,6 +557,9 @@ func (s *Server) handleListTree(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleFileContent(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
+	if !s.ensureProjectRead(w, r, name) {
+		return
+	}
 	q := r.URL.Query()
 	content, err := s.git.FileContent(name, q.Get("revision"), q.Get("path"))
 	if err != nil {
@@ -583,10 +702,9 @@ func parseChangeQuery(q, selfName string) store.ChangeQuery {
 }
 
 func (s *Server) handleListChanges(w http.ResponseWriter, r *http.Request) {
+	acct := s.optionalAccount(r)
 	selfName := ""
-	if acct := accountFrom(r.Context()); acct != nil {
-		selfName = acct.Username
-	} else if acct, err := s.auth.CurrentAccount(r); err == nil {
+	if acct != nil {
 		selfName = acct.Username
 	}
 	cq := parseChangeQuery(r.URL.Query().Get("q"), selfName)
@@ -607,6 +725,9 @@ func (s *Server) handleListChanges(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("X-Total-Count", strconv.Itoa(total))
 	out := make([]map[string]any, 0, len(changes))
 	for _, c := range changes {
+		if !s.canReadChange(acct, c) {
+			continue
+		}
 		info := changeInfo(c)
 		if ps, err := s.db.GetPatchSet(c.Number, c.CurrentPS); err == nil {
 			info["current_revision"] = ps.CommitSHA
@@ -671,6 +792,9 @@ func (s *Server) handleChangeDetail(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, "change not found")
 		return
 	}
+	if !s.ensureChangeRead(w, r, c) {
+		return
+	}
 	info := changeInfo(c)
 	info["current_ps"] = c.CurrentPS
 	if c.Submitted != nil {
@@ -723,6 +847,13 @@ func (s *Server) handleListRevisions(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "invalid change number")
 		return
 	}
+	c, err := s.db.GetChange(num)
+	if err != nil || !s.ensureChangeRead(w, r, c) {
+		if err != nil {
+			writeErr(w, http.StatusNotFound, "change not found")
+		}
+		return
+	}
 	pss, err := s.db.ListPatchSets(num)
 	if err != nil {
 		writeErr(w, http.StatusNotFound, "change not found")
@@ -752,6 +883,9 @@ func (s *Server) handleRevisionFiles(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, "change not found")
 		return
 	}
+	if !s.ensureChangeRead(w, r, c) {
+		return
+	}
 	psNum := s.parsePS(r, c.CurrentPS)
 	diffs, err := s.git.PatchSetDiff(num, psNum)
 	if err != nil {
@@ -770,6 +904,9 @@ func (s *Server) handleRevisionFileContent(w http.ResponseWriter, r *http.Reques
 	c, err := s.db.GetChange(num)
 	if err != nil {
 		writeErr(w, http.StatusNotFound, "change not found")
+		return
+	}
+	if !s.ensureChangeRead(w, r, c) {
 		return
 	}
 	psNum := s.parsePS(r, c.CurrentPS)
@@ -797,6 +934,9 @@ func (s *Server) handleRevisionPatch(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, "change not found")
 		return
 	}
+	if !s.ensureChangeRead(w, r, c) {
+		return
+	}
 	psNum := s.parsePS(r, c.CurrentPS)
 	patch, err := s.git.PatchText(num, psNum)
 	if err != nil {
@@ -810,6 +950,14 @@ func (s *Server) handleListComments(w http.ResponseWriter, r *http.Request) {
 	num, ok := s.parseChangeNum(r)
 	if !ok {
 		writeErr(w, http.StatusBadRequest, "invalid change number")
+		return
+	}
+	c, err := s.db.GetChange(num)
+	if err != nil {
+		writeErr(w, http.StatusNotFound, "change not found")
+		return
+	}
+	if !s.ensureChangeRead(w, r, c) {
 		return
 	}
 	comments, err := s.db.ListComments(num)
@@ -849,6 +997,9 @@ func (s *Server) handleReview(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, "change not found")
 		return
 	}
+	if !s.ensureChangeRead(w, r, c) {
+		return
+	}
 	var req struct {
 		Labels   map[string]int `json:"labels"`
 		Message  string         `json:"message"`
@@ -863,19 +1014,28 @@ func (s *Server) handleReview(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	allowed := map[string][2]int{"Code-Review": {-2, 2}, "Verified": {-1, 1}}
+	ref := branchRef(c.Branch)
+	// Posting a cover message or inline comments requires the comment right.
+	if strings.TrimSpace(req.Message) != "" || len(req.Comments) > 0 {
+		if !s.can(acct, c.Project, ref, PermComment) {
+			forbid(w, PermComment)
+			return
+		}
+	}
+
 	// Anyone who reviews becomes a reviewer (Gerrit behaviour).
 	s.db.AddReviewer(c.Number, acct.ID)
 
 	voteTokens := []string{}
 	for label, value := range req.Labels {
-		bounds, ok := allowed[label]
-		if !ok {
-			writeErr(w, http.StatusBadRequest, "label not permitted: "+label)
+		acc := s.checkAccess(acct, c.Project, ref, "label-"+label)
+		if !acc.allowed {
+			forbid(w, "label-"+label)
 			return
 		}
-		if value < bounds[0] || value > bounds[1] {
-			writeErr(w, http.StatusBadRequest, fmt.Sprintf("%s value out of range", label))
+		if value < acc.min || value > acc.max {
+			writeErr(w, http.StatusForbidden,
+				fmt.Sprintf("%s value %d out of permitted range [%d, %d]", label, value, acc.min, acc.max))
 			return
 		}
 		v := &store.Vote{ChangeNumber: c.Number, PatchSet: c.CurrentPS, AccountID: acct.ID, Label: label, Value: value}
@@ -940,6 +1100,10 @@ func (s *Server) handleSubmit(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusConflict, "change is not open")
 		return
 	}
+	if !s.can(acct, c.Project, branchRef(c.Branch), PermSubmit) {
+		forbid(w, PermSubmit)
+		return
+	}
 	votes, _ := s.db.ListVotes(c.Number)
 	hasPlus2 := false
 	for _, v := range votes {
@@ -982,8 +1146,15 @@ func (s *Server) setChangeStatus(w http.ResponseWriter, r *http.Request, to, req
 		writeErr(w, http.StatusNotFound, "change not found")
 		return
 	}
+	if !s.ensureChangeRead(w, r, c) {
+		return
+	}
 	if c.Status != requireFrom {
 		writeErr(w, http.StatusConflict, "unexpected change status: "+c.Status)
+		return
+	}
+	if !s.can(acct, c.Project, branchRef(c.Branch), PermAbandon) {
+		forbid(w, PermAbandon)
 		return
 	}
 	if err := s.db.UpdateChangeStatus(c.Number, to, nil); err != nil {
@@ -1009,8 +1180,12 @@ func (s *Server) handleListMessages(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "invalid change number")
 		return
 	}
-	if _, err := s.db.GetChange(num); err != nil {
+	c, err := s.db.GetChange(num)
+	if err != nil {
 		writeErr(w, http.StatusNotFound, "change not found")
+		return
+	}
+	if !s.ensureChangeRead(w, r, c) {
 		return
 	}
 	msgs, err := s.db.ListChangeMessages(num)
@@ -1063,6 +1238,13 @@ func (s *Server) handleAddReviewer(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, "change not found")
 		return
 	}
+	if !s.ensureChangeRead(w, r, c) {
+		return
+	}
+	if c.OwnerID != acct.ID && !s.can(acct, c.Project, branchRef(c.Branch), PermComment) {
+		forbid(w, PermAddReviewer)
+		return
+	}
 	var req struct {
 		Reviewer string `json:"reviewer"`
 	}
@@ -1097,6 +1279,13 @@ func (s *Server) handleDeleteReviewer(w http.ResponseWriter, r *http.Request) {
 	c, err := s.db.GetChange(num)
 	if err != nil {
 		writeErr(w, http.StatusNotFound, "change not found")
+		return
+	}
+	if !s.ensureChangeRead(w, r, c) {
+		return
+	}
+	if c.OwnerID != acct.ID && !s.can(acct, c.Project, branchRef(c.Branch), PermComment) {
+		forbid(w, PermAddReviewer)
 		return
 	}
 	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
@@ -1136,6 +1325,13 @@ func (s *Server) handleSetTopic(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, "change not found")
 		return
 	}
+	if !s.ensureChangeRead(w, r, c) {
+		return
+	}
+	if !s.can(acct, c.Project, branchRef(c.Branch), PermEditTopic) {
+		forbid(w, PermEditTopic)
+		return
+	}
 	var req struct {
 		Topic string `json:"topic"`
 	}
@@ -1170,6 +1366,13 @@ func (s *Server) handleDeleteTopic(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, "change not found")
 		return
 	}
+	if !s.ensureChangeRead(w, r, c) {
+		return
+	}
+	if !s.can(acct, c.Project, branchRef(c.Branch), PermEditTopic) {
+		forbid(w, PermEditTopic)
+		return
+	}
 	if err := s.db.SetTopic(c.Number, ""); err != nil {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
@@ -1190,6 +1393,13 @@ func (s *Server) setWIP(w http.ResponseWriter, r *http.Request, wip bool) {
 	c, err := s.db.GetChange(num)
 	if err != nil {
 		writeErr(w, http.StatusNotFound, "change not found")
+		return
+	}
+	if !s.ensureChangeRead(w, r, c) {
+		return
+	}
+	if c.OwnerID != acct.ID && !s.can(acct, c.Project, branchRef(c.Branch), PermEditTopic) {
+		forbid(w, "wip")
 		return
 	}
 	if err := s.db.SetWorkInProgress(c.Number, wip); err != nil {

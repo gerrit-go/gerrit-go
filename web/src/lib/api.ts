@@ -113,6 +113,38 @@ export interface BranchInfo {
   sha: string;
 }
 
+export interface GroupInfo {
+  id: string;
+  name: string;
+  description?: string;
+  system?: boolean;
+}
+
+export interface GroupMember {
+  _account_id: number;
+  username: string;
+  name: string;
+  email?: string;
+}
+
+export interface AccessRuleInfo {
+  id?: number;
+  project?: string;
+  ref_pattern: string;
+  permission: string;
+  group_id: number;
+  group_name?: string;
+  action: "ALLOW" | "DENY" | "BLOCK";
+  exclusive?: boolean;
+  min?: number;
+  max?: number;
+}
+
+export interface ProjectAccess {
+  local: AccessRuleInfo[];
+  can_edit: boolean;
+}
+
 class ApiError extends Error {
   status: number;
   constructor(status: number, message: string) {
@@ -183,6 +215,28 @@ export const api = {
     if (!res.ok) throw new ApiError(res.status, await res.text());
     return res.text();
   },
+  projectAccess: (project: string) =>
+    request<ProjectAccess>(`/projects/${encodeURIComponent(project)}/access`),
+  setProjectAccess: (project: string, rules: AccessRuleInfo[]) =>
+    request<ProjectAccess>(`/projects/${encodeURIComponent(project)}/access`, {
+      method: "PUT",
+      body: JSON.stringify({ rules }),
+    }),
+
+  listGroups: () => request<Record<string, GroupInfo>>("/groups/"),
+  createGroup: (name: string, description = "") =>
+    request<GroupInfo>("/groups/", { method: "POST", body: JSON.stringify({ name, description }) }),
+  deleteGroup: (id: string) => request<null>(`/groups/${encodeURIComponent(id)}`, { method: "DELETE" }),
+  groupMembers: (id: string) =>
+    request<Record<string, GroupMember>>(`/groups/${encodeURIComponent(id)}/members`),
+  addGroupMember: (id: string, account: string) =>
+    request<GroupMember>(`/groups/${encodeURIComponent(id)}/members/${encodeURIComponent(account)}`, {
+      method: "PUT",
+    }),
+  removeGroupMember: (id: string, account: string) =>
+    request<null>(`/groups/${encodeURIComponent(id)}/members/${encodeURIComponent(account)}`, {
+      method: "DELETE",
+    }),
 
   listChanges: (q = "") => request<ChangeInfo[]>(`/changes/?q=${encodeURIComponent(q)}`),
   listChangesPaged: async (
