@@ -1,5 +1,5 @@
 import { Link, NavLink, Route, Routes, useNavigate } from "react-router-dom";
-import { GitPullRequestArrow, FolderGit2, LogOut, Search, Sun, Moon, Monitor, Check, Users } from "lucide-react";
+import { GitPullRequestArrow, FolderGit2, LogOut, Search, Sun, Moon, Monitor, Check, Users, LayoutDashboard } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useAuth } from "@/auth";
 import { useTheme, type Theme } from "@/theme";
@@ -16,6 +16,7 @@ import {
 import { cn } from "@/lib/utils";
 import ChangesPage from "@/pages/ChangesPage";
 import ChangeDetailPage from "@/pages/ChangeDetailPage";
+import DashboardPage from "@/pages/DashboardPage";
 import ProjectsPage from "@/pages/ProjectsPage";
 import ProjectDetailPage from "@/pages/ProjectDetailPage";
 import GroupsPage from "@/pages/GroupsPage";
@@ -81,6 +82,20 @@ function Header() {
           <span className="hidden sm:inline">Gerrit Go</span>
         </Link>
         <nav className="flex items-center gap-1 text-sm">
+          {user && (
+            <NavLink
+              to="/dashboard"
+              className={({ isActive }) =>
+                cn(
+                  "flex items-center gap-1.5 rounded-md px-3 py-1.5 text-muted-foreground transition-colors hover:text-foreground hover:bg-accent",
+                  isActive && "bg-accent text-foreground font-medium",
+                )
+              }
+            >
+              <LayoutDashboard className="size-4" />
+              Dashboard
+            </NavLink>
+          )}
           <NavLink
             to="/"
             end
@@ -178,6 +193,7 @@ export default function App() {
       <main className="mx-auto max-w-7xl px-4 py-6">
         <Routes>
           <Route path="/" element={<ChangesPage />} />
+          <Route path="/dashboard" element={<DashboardPage />} />
           <Route path="/login" element={<LoginPage />} />
           <Route path="/projects" element={<ProjectsPage />} />
           <Route path="/projects/*" element={<ProjectDetailPage />} />

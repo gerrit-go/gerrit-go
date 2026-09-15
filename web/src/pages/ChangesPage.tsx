@@ -274,7 +274,7 @@ function SearchBar({ defaultValue }: { defaultValue: string }) {
     <input
       name="q"
       defaultValue={defaultValue}
-      placeholder="Filter: owner:self reviewer:alice project:foo branch:main topic:rel is:wip is:starred is:watched has:vote change:42 …"
+      placeholder="Filter: owner:self reviewer:alice status:open is:starred has:vote (project:foo OR project:bar) -is:wip …"
       className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-xs transition-[color,box-shadow] outline-none placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
     />
   );

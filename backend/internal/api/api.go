@@ -644,111 +644,21 @@ func (s *Server) parsePS(r *http.Request, current int) int {
 	return n
 }
 
-func parseDate(s string) *time.Time {
-	for _, layout := range []string{time.RFC3339, "2006-01-02T15:04:05", "2006-01-02"} {
-		if t, err := time.Parse(layout, s); err == nil {
-			return &t
-		}
-	}
-	return nil
-}
-
-// parseChangeQuery turns a Gerrit-style query string into a store.ChangeQuery.
-// selfName, when non-empty, resolves owner:self / reviewer:self.
-func parseChangeQuery(q string, self *store.Account) store.ChangeQuery {
-	cq := store.ChangeQuery{}
-	selfName := ""
-	var selfID int64
-	if self != nil {
-		selfName = self.Username
-		selfID = self.ID
-	}
-	for _, part := range strings.Fields(q) {
-		key, val, hasColon := strings.Cut(part, ":")
-		if !hasColon {
-			cq.Text = part
-			continue
-		}
-		val = strings.Trim(val, "\"")
-		resolve := func(v string) string {
-			if strings.EqualFold(v, "self") && selfName != "" {
-				return selfName
-			}
-			return v
-		}
-		switch strings.ToLower(key) {
-		case "status":
-			switch strings.ToLower(val) {
-			case "open", "new", "pending":
-				cq.Status = "NEW"
-			case "merged", "closed":
-				cq.Status = "MERGED"
-			case "abandoned":
-				cq.Status = "ABANDONED"
-			}
-		case "project":
-			cq.Project = val
-		case "branch":
-			cq.Branch = val
-		case "topic":
-			cq.Topic = val
-		case "owner":
-			cq.OwnerUser = resolve(val)
-		case "reviewer":
-			cq.ReviewerUser = resolve(val)
-		case "change":
-			if n, err := strconv.ParseInt(val, 10, 64); err == nil {
-				cq.ChangeNumber = n
-			} else {
-				cq.ChangeID = val
-			}
-		case "is":
-			switch strings.ToLower(val) {
-			case "wip":
-				t := true
-				cq.WIP = &t
-			case "open":
-				cq.Status = "NEW"
-			case "merged":
-				cq.Status = "MERGED"
-			case "abandoned":
-				cq.Status = "ABANDONED"
-			case "starred":
-				cq.StarredAccountID = selfID
-			case "watched":
-				cq.WatchedAccountID = selfID
-			}
-		case "has":
-			if strings.EqualFold(val, "vote") {
-				cq.HasVote = true
-			}
-		case "before", "until":
-			cq.Before = parseDate(val)
-		case "after", "since":
-			cq.After = parseDate(val)
-		default:
-			// Unknown operator: treat the whole token as free text.
-			if cq.Text == "" {
-				cq.Text = part
-			}
-		}
-	}
-	return cq
-}
-
 func (s *Server) handleListChanges(w http.ResponseWriter, r *http.Request) {
 	acct := s.optionalAccount(r)
-	cq := parseChangeQuery(r.URL.Query().Get("q"), acct)
+	limit := 0
 	if n, err := strconv.Atoi(r.URL.Query().Get("n")); err == nil && n > 0 {
-		cq.Limit = n
+		limit = n
 	}
+	offset := 0
 	if start, err := strconv.Atoi(r.URL.Query().Get("start")); err == nil && start > 0 {
-		cq.Offset = start
+		offset = start
 	} else if sStart, err := strconv.Atoi(r.URL.Query().Get("S")); err == nil && sStart > 0 {
-		cq.Offset = sStart
+		offset = sStart
 	}
 
-	changes, total, err := s.db.SearchChanges(cq)
+	root := store.ParseQuery(r.URL.Query().Get("q"), acct)
+	changes, total, err := s.db.SearchChangesParsed(root, limit, offset)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
