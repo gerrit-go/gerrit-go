@@ -183,6 +183,24 @@ export interface TagInfo {
   message?: string;
 }
 
+export interface CheckRun {
+  check_name: string;
+  state: string;
+  url?: string;
+  message?: string;
+  started?: string;
+  finished?: string;
+}
+
+export interface Webhook {
+  id: number;
+  project: string;
+  url: string;
+  events: string[];
+  active: boolean;
+  created: string;
+}
+
 export interface GroupInfo {
   id: string;
   name: string;
@@ -498,6 +516,47 @@ export const api = {
     }),
   removeAttention: (num: number | string, id: number) =>
     request<AttentionEntry[]>(`/changes/${num}/attention/${id}`, { method: "DELETE" }),
+
+  listCheckRuns: (num: number | string, ps: number | "current" = "current") =>
+    request<CheckRun[]>(`/changes/${num}/revisions/${ps}/checkruns`),
+  upsertCheckRun: (
+    num: number | string,
+    ps: number | "current",
+    body: { check_name: string; state: string; url?: string; message?: string },
+  ) =>
+    request<CheckRun>(`/changes/${num}/revisions/${ps}/checkruns`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  deleteCheckRun: (num: number | string, ps: number | "current", name: string) =>
+    request<null>(
+      `/changes/${num}/revisions/${ps}/checkruns/${encodeURIComponent(name)}`,
+      { method: "DELETE" },
+    ),
+
+  listWebhooks: (project: string) =>
+    request<Webhook[]>(`/projects/${encodeURIComponent(project)}/webhooks`),
+  createWebhook: (
+    project: string,
+    body: { url: string; events?: string[]; secret?: string; active?: boolean },
+  ) =>
+    request<Webhook>(`/projects/${encodeURIComponent(project)}/webhooks`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  deleteWebhook: (project: string, id: number) =>
+    request<null>(`/projects/${encodeURIComponent(project)}/webhooks/${id}`, {
+      method: "DELETE",
+    }),
+  listGlobalWebhooks: () => request<Webhook[]>("/config/webhooks"),
+  createGlobalWebhook: (body: {
+    url: string;
+    events?: string[];
+    secret?: string;
+    active?: boolean;
+  }) => request<Webhook>("/config/webhooks", { method: "POST", body: JSON.stringify(body) }),
+  deleteGlobalWebhook: (id: number) =>
+    request<null>(`/config/webhooks/${id}`, { method: "DELETE" }),
 
   watchProject: (project: string, notify = "ALL") =>
     request<{ project: string; notify: string; watched: boolean }>(

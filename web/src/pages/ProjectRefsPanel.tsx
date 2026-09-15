@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { Archive, ArchiveRestore, Plus, Tag as TagIcon, Trash2 } from "lucide-react";
-import { api, type BranchInfo, type TagInfo } from "@/lib/api";
+import { Archive, ArchiveRestore, Plus, Tag as TagIcon, Trash2, Webhook as WebhookIcon } from "lucide-react";
+import { api, type BranchInfo, type TagInfo, type Webhook } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -407,6 +407,164 @@ export function ManagePanel({
           </DialogFooter>
         </DialogContent>
       </Dialog>
+    </div>
+  );
+}
+
+export function WebhooksPanel({ project, canEdit }: { project: string; canEdit: boolean }) {
+  const [hooks, setHooks] = useState<Webhook[] | null>(null);
+  const [url, setUrl] = useState("");
+  const [events, setEvents] = useState("*");
+  const [secret, setSecret] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+
+  const load = () =>
+    api
+      .listWebhooks(project)
+      .then((h) => setHooks(h ?? []))
+      .catch((e) => setError((e as Error).message));
+
+  useEffect(() => {
+    setHooks(null);
+    load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [project]);
+
+  const create = async () => {
+    if (!url.trim()) return;
+    setBusy(true);
+    setError("");
+    try {
+      const ev = events
+        .split(",")
+        .map((e) => e.trim())
+        .filter(Boolean);
+      await api.createWebhook(project, {
+        url: url.trim(),
+        events: ev.length ? ev : ["*"],
+        secret: secret.trim() || undefined,
+      });
+      setUrl("");
+      setEvents("*");
+      setSecret("");
+      await load();
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const remove = async (id: number) => {
+    if (!confirm("Delete this webhook?")) return;
+    setError("");
+    try {
+      await api.deleteWebhook(project, id);
+      await load();
+    } catch (err) {
+      setError((err as Error).message);
+    }
+  };
+
+  return (
+    <div className="flex flex-col gap-4">
+      <p className="text-xs text-muted-foreground">
+        Webhooks POST a JSON event payload to the URL whenever a matching change event occurs. Set a
+        secret to receive an <code>X-GerritGo-Signature</code> HMAC-SHA256 header. Use{" "}
+        <code>*</code> to subscribe to every event.
+      </p>
+      {error && <p className="text-sm text-destructive">{error}</p>}
+      {canEdit && (
+        <div className="flex flex-wrap items-end gap-3 rounded-lg border p-3">
+          <div className="flex flex-col gap-1">
+            <Label htmlFor="hook-url" className="text-xs">URL</Label>
+            <Input
+              id="hook-url"
+              className="h-8 w-72 text-sm"
+              placeholder="https://example.com/hook"
+              value={url}
+              onChange={(e) => setUrl(e.target.value)}
+            />
+          </div>
+          <div className="flex flex-col gap-1">
+            <Label htmlFor="hook-events" className="text-xs">Events (comma-separated)</Label>
+            <Input
+              id="hook-events"
+              className="h-8 w-56 text-sm"
+              placeholder="* or created,submitted"
+              value={events}
+              onChange={(e) => setEvents(e.target.value)}
+            />
+          </div>
+          <div className="flex flex-col gap-1">
+            <Label htmlFor="hook-secret" className="text-xs">Secret (optional)</Label>
+            <Input
+              id="hook-secret"
+              className="h-8 w-44 text-sm"
+              placeholder="shared secret"
+              value={secret}
+              onChange={(e) => setSecret(e.target.value)}
+            />
+          </div>
+          <Button size="sm" onClick={create} disabled={busy || !url.trim()}>
+            <Plus className="size-4" />
+            {busy ? "Adding…" : "Add"}
+          </Button>
+        </div>
+      )}
+      {hooks === null ? (
+        <div className="flex flex-col gap-2">
+          {Array.from({ length: 2 }).map((_, i) => (
+            <Skeleton key={i} className="h-10 w-full" />
+          ))}
+        </div>
+      ) : hooks.length === 0 ? (
+        <p className="rounded-lg border border-dashed p-6 text-center text-sm text-muted-foreground">
+          No webhooks configured.
+        </p>
+      ) : (
+        <div className="rounded-lg border">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>URL</TableHead>
+                <TableHead className="w-48">Events</TableHead>
+                <TableHead className="w-20">Active</TableHead>
+                {canEdit && <TableHead className="w-12" />}
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {hooks.map((h) => (
+                <TableRow key={h.id}>
+                  <TableCell className="max-w-[24rem] truncate font-mono text-xs">{h.url}</TableCell>
+                  <TableCell className="text-xs text-muted-foreground">{h.events.join(", ")}</TableCell>
+                  <TableCell className="text-xs">{h.active ? "yes" : "no"}</TableCell>
+                  {canEdit && (
+                    <TableCell>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="size-8"
+                        aria-label="Delete webhook"
+                        onClick={() => remove(h.id)}
+                      >
+                        <Trash2 className="size-4 text-destructive" />
+                      </Button>
+                    </TableCell>
+                  )}
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </div>
+      )}
+      {!canEdit && (
+        <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
+          <WebhookIcon className="size-3.5" />
+          Only project owners and administrators can manage webhooks.
+        </p>
+      )}
     </div>
   );
 }

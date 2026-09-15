@@ -154,6 +154,9 @@ func (d *DB) DeleteProject(name string) error {
 	if _, err := tx.Exec(`DELETE FROM watched_projects WHERE project=?`, name); err != nil {
 		return err
 	}
+	if _, err := tx.Exec(`DELETE FROM webhooks WHERE project=?`, name); err != nil {
+		return err
+	}
 	if _, err := tx.Exec(`DELETE FROM projects WHERE name=?`, name); err != nil {
 		return err
 	}

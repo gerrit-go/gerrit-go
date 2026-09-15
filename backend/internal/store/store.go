@@ -322,7 +322,41 @@ CREATE TABLE IF NOT EXISTS change_attention (
   reason TEXT NOT NULL DEFAULT '',
   added TEXT NOT NULL,
   PRIMARY KEY (change_number, account_id)
-);`
+);
+CREATE TABLE IF NOT EXISTS check_runs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  change_number INTEGER NOT NULL REFERENCES changes(number) ON DELETE CASCADE,
+  patch_set INTEGER NOT NULL,
+  name TEXT NOT NULL,
+  state TEXT NOT NULL DEFAULT 'NOT_STARTED',
+  url TEXT NOT NULL DEFAULT '',
+  message TEXT NOT NULL DEFAULT '',
+  started TEXT NOT NULL DEFAULT '',
+  finished TEXT NOT NULL DEFAULT '',
+  created TEXT NOT NULL,
+  UNIQUE (change_number, patch_set, name)
+);
+CREATE INDEX IF NOT EXISTS idx_check_runs_ps ON check_runs(change_number, patch_set);
+CREATE TABLE IF NOT EXISTS webhooks (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  project TEXT NOT NULL DEFAULT '',
+  url TEXT NOT NULL,
+  events TEXT NOT NULL DEFAULT '*',
+  secret TEXT NOT NULL DEFAULT '',
+  active INTEGER NOT NULL DEFAULT 1,
+  created TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_webhooks_project ON webhooks(project);
+CREATE TABLE IF NOT EXISTS audit_log (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  account_id INTEGER NOT NULL DEFAULT 0,
+  action TEXT NOT NULL,
+  target_type TEXT NOT NULL DEFAULT '',
+  target_id TEXT NOT NULL DEFAULT '',
+  detail TEXT NOT NULL DEFAULT '',
+  created TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_audit_id ON audit_log(id);`
 	if _, err := db.Exec(schema); err != nil {
 		return err
 	}

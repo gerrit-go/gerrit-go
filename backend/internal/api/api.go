@@ -17,21 +17,28 @@ import (
 
 	"gerrit-go/internal/auth"
 	"gerrit-go/internal/gitsvc"
+	"gerrit-go/internal/metrics"
 	"gerrit-go/internal/notify"
 	"gerrit-go/internal/store"
+	"gerrit-go/internal/webhook"
 )
 
 type Server struct {
-	db     *store.DB
-	auth   *auth.Service
-	git    *gitsvc.Service
-	notify *notify.Notifier
-	static string
-	mux    *http.ServeMux
+	db      *store.DB
+	auth    *auth.Service
+	git     *gitsvc.Service
+	notify  *notify.Notifier
+	hook    *webhook.Dispatcher
+	metrics *metrics.Registry
+	static  string
+	mux     *http.ServeMux
 }
 
 func NewRouter(db *store.DB, authSvc *auth.Service, gitSvc *gitsvc.Service, notifier *notify.Notifier, staticDir string) http.Handler {
-	s := &Server{db: db, auth: authSvc, git: gitSvc, notify: notifier, static: staticDir, mux: http.NewServeMux()}
+	reg := metrics.New()
+	hook := webhook.New(db, 10*time.Second)
+	hook.SetCounters(reg.IncWebhookSent, reg.IncWebhookFail)
+	s := &Server{db: db, auth: authSvc, git: gitSvc, notify: notifier, hook: hook, metrics: reg, static: staticDir, mux: http.NewServeMux()}
 	s.routes()
 	return s
 }
@@ -137,6 +144,25 @@ func (s *Server) routes() {
 	mux.HandleFunc("PUT /changes/{num}/attention", s.requireAuth(s.handleAddAttention))
 	mux.HandleFunc("DELETE /changes/{num}/attention/{id}", s.requireAuth(s.handleRemoveAttention))
 
+	// Checks API.
+	mux.HandleFunc("GET /changes/{num}/revisions/{ps}/checkruns", s.handleListCheckRuns)
+	mux.HandleFunc("POST /changes/{num}/revisions/{ps}/checkruns", s.requireAuth(s.handleUpsertCheckRun))
+	mux.HandleFunc("DELETE /changes/{num}/revisions/{ps}/checkruns/{name}", s.requireAuth(s.handleDeleteCheckRun))
+
+	// Webhooks: project-scoped and global (admin).
+	mux.HandleFunc("GET /projects/{name}/webhooks", s.requireAuth(s.handleListProjectWebhooks))
+	mux.HandleFunc("POST /projects/{name}/webhooks", s.requireAuth(s.handleCreateProjectWebhook))
+	mux.HandleFunc("DELETE /projects/{name}/webhooks/{id}", s.requireAuth(s.handleDeleteProjectWebhook))
+	mux.HandleFunc("GET /config/webhooks", s.requireAuth(s.handleListGlobalWebhooks))
+	mux.HandleFunc("POST /config/webhooks", s.requireAuth(s.handleCreateGlobalWebhook))
+	mux.HandleFunc("DELETE /config/webhooks/{id}", s.requireAuth(s.handleDeleteGlobalWebhook))
+
+	// Audit log (admin).
+	mux.HandleFunc("GET /admin/audit", s.requireAuth(s.handleListAudit))
+
+	// Prometheus metrics.
+	mux.HandleFunc("GET /metrics", s.metrics.Handler(s.db))
+
 	// Gerrit-compatible authenticated alias prefix: /a/...
 	mux.Handle("/a/", http.StripPrefix("/a", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		acct, err := s.auth.CurrentAccount(r)
@@ -152,6 +178,7 @@ func (s *Server) routes() {
 }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	s.metrics.IncHTTP()
 	s.mux.ServeHTTP(w, r)
 }
 

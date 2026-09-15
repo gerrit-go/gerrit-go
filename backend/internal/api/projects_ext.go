@@ -228,6 +228,7 @@ func (s *Server) handleSetProjectState(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	s.audit(acct, "project-state", "project", project, state)
 	writeJSON(w, http.StatusOK, map[string]any{"name": project, "state": state})
 }
 
@@ -252,6 +253,7 @@ func (s *Server) handleDeleteProject(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	s.audit(acct, "project-delete", "project", project, "")
 	w.WriteHeader(http.StatusNoContent)
 }
 

@@ -5,8 +5,13 @@ import {
   BellRing,
   Check,
   ChevronDown,
+  CircleCheck,
+  CircleDot,
+  CircleX,
+  ClipboardCheck,
   Copy,
   CornerDownRight,
+  ExternalLink,
   EyeOff,
   FilePlus2,
   FileText,
@@ -32,6 +37,7 @@ import {
   type AttentionEntry,
   type ChangeInfo,
   type ChangeMessageInfo,
+  type CheckRun,
   type CommentDraftInfo,
   type CommentInfo,
   type DiffHunk,
@@ -533,6 +539,10 @@ export default function ChangeDetailPage() {
             change={change}
             canEdit={!!user && change.status === "NEW"}
             onDone={load}
+          />
+          <ChecksCard
+            change={change}
+            canEdit={!!user && change.status === "NEW"}
           />
           <Card className="gap-3 py-4">
             <CardHeader className="px-4 py-0">
@@ -1079,6 +1089,165 @@ function HashtagsCard({
             />
             <Button size="sm" variant="outline" disabled={busy || !value.trim()} onClick={add}>
               <Tag className="size-4" />
+            </Button>
+          </div>
+        )}
+        {err && <p className="text-xs text-destructive">{err}</p>}
+      </CardContent>
+    </Card>
+  );
+}
+
+const CHECK_STATES = ["NOT_STARTED", "SCHEDULED", "RUNNING", "SUCCESSFUL", "FAILED"];
+
+function checkStateIcon(state: string) {
+  switch (state) {
+    case "SUCCESSFUL":
+      return <CircleCheck className="size-4 text-emerald-600" />;
+    case "FAILED":
+      return <CircleX className="size-4 text-red-600" />;
+    case "RUNNING":
+    case "SCHEDULED":
+      return <CircleDot className="size-4 text-blue-600" />;
+    default:
+      return <CircleDot className="size-4 text-muted-foreground" />;
+  }
+}
+
+function ChecksCard({ change, canEdit }: { change: ChangeInfo; canEdit: boolean }) {
+  const [runs, setRuns] = useState<CheckRun[]>([]);
+  const [loaded, setLoaded] = useState(false);
+  const [name, setName] = useState("");
+  const [state, setState] = useState("SUCCESSFUL");
+  const [url, setUrl] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+
+  const loadRuns = useCallback(() => {
+    api
+      .listCheckRuns(change._number)
+      .then((r) => setRuns(r ?? []))
+      .catch(() => setRuns([]))
+      .finally(() => setLoaded(true));
+  }, [change._number]);
+
+  useEffect(loadRuns, [loadRuns]);
+
+  const save = async () => {
+    const n = name.trim();
+    if (!n) return;
+    setBusy(true);
+    setErr("");
+    try {
+      await api.upsertCheckRun(change._number, "current", {
+        check_name: n,
+        state,
+        url: url.trim() || undefined,
+      });
+      setName("");
+      setUrl("");
+      loadRuns();
+    } catch (e) {
+      setErr((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const remove = async (checkName: string) => {
+    setBusy(true);
+    setErr("");
+    try {
+      await api.deleteCheckRun(change._number, "current", checkName);
+      loadRuns();
+    } catch (e) {
+      setErr((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Card className="gap-3 py-4">
+      <CardHeader className="px-4 py-0">
+        <CardTitle className="flex items-center gap-1.5 text-sm">
+          <ClipboardCheck className="size-4 text-muted-foreground" />
+          Checks
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="flex flex-col gap-2 px-4">
+        {!loaded ? (
+          <Skeleton className="h-6 w-full" />
+        ) : runs.length === 0 ? (
+          <span className="text-sm text-muted-foreground">No checks reported</span>
+        ) : (
+          <ul className="flex flex-col gap-1.5">
+            {runs.map((run) => (
+              <li key={run.check_name} className="flex items-center gap-2 text-sm">
+                {checkStateIcon(run.state)}
+                <span className="font-medium">{run.check_name}</span>
+                <span className="text-xs text-muted-foreground">{run.state}</span>
+                {run.url && (
+                  <a
+                    href={run.url}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="text-muted-foreground hover:text-foreground"
+                    title={run.url}
+                  >
+                    <ExternalLink className="size-3.5" />
+                  </a>
+                )}
+                {canEdit && (
+                  <button
+                    className="ml-auto text-muted-foreground hover:text-destructive"
+                    onClick={() => remove(run.check_name)}
+                    title="Remove check"
+                    disabled={busy}
+                  >
+                    <X className="size-3.5" />
+                  </button>
+                )}
+              </li>
+            ))}
+          </ul>
+        )}
+        {canEdit && (
+          <div className="flex flex-col gap-1.5 border-t pt-2">
+            <Input
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="check name (e.g. CI)"
+              className="h-8 text-xs"
+            />
+            <div className="flex gap-1.5">
+              <select
+                value={state}
+                onChange={(e) => setState(e.target.value)}
+                className="h-8 rounded-md border border-input bg-transparent px-2 text-xs outline-none focus-visible:border-ring"
+              >
+                {CHECK_STATES.map((s) => (
+                  <option key={s} value={s}>
+                    {s}
+                  </option>
+                ))}
+              </select>
+              <Input
+                value={url}
+                onChange={(e) => setUrl(e.target.value)}
+                placeholder="url (optional)"
+                className="h-8 flex-1 text-xs"
+              />
+            </div>
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={busy || !name.trim()}
+              onClick={save}
+              className="self-start"
+            >
+              <Check className="size-4" />
+              Report check
             </Button>
           </div>
         )}

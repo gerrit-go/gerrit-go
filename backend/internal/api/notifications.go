@@ -18,6 +18,32 @@ func (s *Server) notifyChange(c *store.Change, actorID int64, ev notify.Event) {
 	ev.OwnerID = c.OwnerID
 	ev.ActorID = actorID
 	s.notify.Notify(ev)
+	s.emitWebhook(c, ev)
+}
+
+// emitWebhook fans a change event out to project and global webhooks. The
+// event type mirrors the in-app notification type so subscribers can filter on
+// a single vocabulary.
+func (s *Server) emitWebhook(c *store.Change, ev notify.Event) {
+	if s.hook == nil {
+		return
+	}
+	payload := map[string]any{
+		"type": ev.Type,
+		"actor": map[string]any{
+			"_account_id": ev.ActorID,
+		},
+		"change": map[string]any{
+			"number":  c.Number,
+			"project": c.Project,
+			"branch":  c.Branch,
+			"subject": c.Subject,
+			"status":  c.Status,
+			"owner":   c.OwnerName,
+		},
+		"message": ev.Message,
+	}
+	s.hook.Dispatch(ev.Type, c.Project, payload)
 }
 
 // ---------- star ----------

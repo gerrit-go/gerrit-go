@@ -20,7 +20,7 @@ import { timeAgo } from "@/lib/utils";
 import { useAuth } from "@/auth";
 import ProjectAccessPanel from "@/pages/ProjectAccessPanel";
 import ProjectSubmitPanel from "@/pages/ProjectSubmitPanel";
-import { BranchesPanel, ManagePanel, TagsPanel } from "@/pages/ProjectRefsPanel";
+import { BranchesPanel, ManagePanel, TagsPanel, WebhooksPanel } from "@/pages/ProjectRefsPanel";
 import {
   Table,
   TableBody,
@@ -151,6 +151,7 @@ export default function ProjectDetailPage() {
           <TabsTrigger value="submit">Submit</TabsTrigger>
           <TabsTrigger value="access">Access</TabsTrigger>
           <TabsTrigger value="manage">Manage</TabsTrigger>
+          <TabsTrigger value="webhooks">Webhooks</TabsTrigger>
         </TabsList>
 
         <TabsContent value="files" className="mt-3">
@@ -311,6 +312,10 @@ export default function ProjectDetailPage() {
             isAdmin={isAdmin}
             onStateChanged={setProjectState}
           />
+        </TabsContent>
+
+        <TabsContent value="webhooks" className="mt-3">
+          <WebhooksPanel project={project} canEdit={canEdit} />
         </TabsContent>
       </Tabs>
 
