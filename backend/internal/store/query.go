@@ -380,6 +380,18 @@ func condFor(term string, self *Account) QueryNode {
 			return leaf(`ch.updated > ?`, t.UTC().Format(time.RFC3339Nano))
 		}
 		return condText(term)
+	case "hashtag":
+		return leaf(`EXISTS (SELECT 1 FROM change_hashtags ht WHERE ht.change_number=ch.number AND ht.hashtag=?)`,
+			NormalizeHashtag(val))
+	case "assignee":
+		if strings.EqualFold(val, "self") && selfID > 0 {
+			return leaf(`ch.assignee_id=?`, selfID)
+		}
+		if strings.EqualFold(val, "none") {
+			return leaf(`ch.assignee_id=0`)
+		}
+		u := resolve(val)
+		return leaf(`EXISTS (SELECT 1 FROM accounts aa WHERE aa.id=ch.assignee_id AND (aa.username=? OR aa.full_name=?))`, u, u)
 	default:
 		return condText(term)
 	}

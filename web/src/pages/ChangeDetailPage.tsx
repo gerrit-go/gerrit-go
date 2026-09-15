@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import {
   ArrowLeft,
+  BellRing,
   Check,
   ChevronDown,
   Copy,
@@ -21,12 +22,14 @@ import {
   Tag,
   Trash2,
   Undo2,
+  User,
   UserPlus,
   X,
 } from "lucide-react";
 import {
   api,
   type AccountInfo,
+  type AttentionEntry,
   type ChangeInfo,
   type ChangeMessageInfo,
   type CommentDraftInfo,
@@ -516,6 +519,21 @@ export default function ChangeDetailPage() {
             ownerId={change.owner._account_id}
             onDone={load}
           />
+          <AssigneeCard
+            change={change}
+            canEdit={!!user && change.status === "NEW"}
+            onDone={load}
+          />
+          <AttentionCard
+            change={change}
+            canEdit={!!user && change.status === "NEW"}
+            onDone={load}
+          />
+          <HashtagsCard
+            change={change}
+            canEdit={!!user && change.status === "NEW"}
+            onDone={load}
+          />
           <Card className="gap-3 py-4">
             <CardHeader className="px-4 py-0">
               <CardTitle className="text-sm">Votes</CardTitle>
@@ -767,6 +785,300 @@ function ReviewersCard({
             />
             <Button size="sm" variant="outline" disabled={busy || !value.trim()} onClick={add}>
               <UserPlus className="size-4" />
+            </Button>
+          </div>
+        )}
+        {err && <p className="text-xs text-destructive">{err}</p>}
+      </CardContent>
+    </Card>
+  );
+}
+
+function AssigneeCard({
+  change,
+  canEdit,
+  onDone,
+}: {
+  change: ChangeInfo;
+  canEdit: boolean;
+  onDone: () => Promise<void>;
+}) {
+  const [value, setValue] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const assignee = change.assignee;
+
+  const set = async () => {
+    if (!value.trim()) return;
+    setBusy(true);
+    setErr("");
+    try {
+      await api.setAssignee(change._number, value.trim());
+      setValue("");
+      await onDone();
+    } catch (e) {
+      setErr((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const clear = async () => {
+    setBusy(true);
+    setErr("");
+    try {
+      await api.deleteAssignee(change._number);
+      await onDone();
+    } catch (e) {
+      setErr((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Card className="gap-3 py-4">
+      <CardHeader className="px-4 py-0">
+        <CardTitle className="flex items-center gap-1.5 text-sm">
+          <User className="size-4 text-muted-foreground" />
+          Assignee
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="flex flex-col gap-2 px-4">
+        {assignee ? (
+          <div className="flex items-center gap-2 text-sm">
+            <span className="truncate">{assignee.name}</span>
+            {canEdit && (
+              <button
+                className="ml-auto text-muted-foreground hover:text-destructive"
+                onClick={clear}
+                title="Remove assignee"
+                disabled={busy}
+              >
+                <X className="size-3.5" />
+              </button>
+            )}
+          </div>
+        ) : (
+          <span className="text-sm text-muted-foreground">Unassigned</span>
+        )}
+        {canEdit && (
+          <div className="flex gap-1.5">
+            <Input
+              value={value}
+              onChange={(e) => setValue(e.target.value)}
+              placeholder="username"
+              className="h-8 text-xs"
+              onKeyDown={(e) => {
+                if (e.key === "Enter") set();
+              }}
+            />
+            <Button size="sm" variant="outline" disabled={busy || !value.trim()} onClick={set}>
+              <Check className="size-4" />
+            </Button>
+          </div>
+        )}
+        {err && <p className="text-xs text-destructive">{err}</p>}
+      </CardContent>
+    </Card>
+  );
+}
+
+function AttentionCard({
+  change,
+  canEdit,
+  onDone,
+}: {
+  change: ChangeInfo;
+  canEdit: boolean;
+  onDone: () => Promise<void>;
+}) {
+  const [value, setValue] = useState("");
+  const [reason, setReason] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const entries: AttentionEntry[] = change.attention_set ?? [];
+
+  const add = async () => {
+    if (!value.trim()) return;
+    setBusy(true);
+    setErr("");
+    try {
+      await api.addAttention(change._number, value.trim(), reason.trim() || undefined);
+      setValue("");
+      setReason("");
+      await onDone();
+    } catch (e) {
+      setErr((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const remove = async (id: number) => {
+    setBusy(true);
+    setErr("");
+    try {
+      await api.removeAttention(change._number, id);
+      await onDone();
+    } catch (e) {
+      setErr((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Card className="gap-3 py-4">
+      <CardHeader className="px-4 py-0">
+        <CardTitle className="flex items-center gap-1.5 text-sm">
+          <BellRing className="size-4 text-muted-foreground" />
+          Attention
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="flex flex-col gap-2 px-4">
+        {entries.length === 0 ? (
+          <span className="text-sm text-muted-foreground">No one needs to act</span>
+        ) : (
+          <ul className="flex flex-col gap-1">
+            {entries.map((e) => (
+              <li key={e.account._account_id} className="flex items-center gap-2 text-sm">
+                <span className="truncate">{e.account.name}</span>
+                {e.reason && (
+                  <span className="truncate text-xs text-muted-foreground" title={e.reason}>
+                    {e.reason}
+                  </span>
+                )}
+                {canEdit && (
+                  <button
+                    className="ml-auto text-muted-foreground hover:text-destructive"
+                    onClick={() => remove(e.account._account_id)}
+                    title="Remove from attention"
+                    disabled={busy}
+                  >
+                    <Trash2 className="size-3.5" />
+                  </button>
+                )}
+              </li>
+            ))}
+          </ul>
+        )}
+        {canEdit && (
+          <div className="flex flex-col gap-1.5">
+            <div className="flex gap-1.5">
+              <Input
+                value={value}
+                onChange={(e) => setValue(e.target.value)}
+                placeholder="username"
+                className="h-8 text-xs"
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") add();
+                }}
+              />
+              <Button size="sm" variant="outline" disabled={busy || !value.trim()} onClick={add}>
+                <BellRing className="size-4" />
+              </Button>
+            </div>
+            <Input
+              value={reason}
+              onChange={(e) => setReason(e.target.value)}
+              placeholder="reason (optional)"
+              className="h-8 text-xs"
+            />
+          </div>
+        )}
+        {err && <p className="text-xs text-destructive">{err}</p>}
+      </CardContent>
+    </Card>
+  );
+}
+
+function HashtagsCard({
+  change,
+  canEdit,
+  onDone,
+}: {
+  change: ChangeInfo;
+  canEdit: boolean;
+  onDone: () => Promise<void>;
+}) {
+  const [value, setValue] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const tags: string[] = change.hashtags ?? [];
+
+  const add = async () => {
+    const t = value.trim().replace(/^#/, "");
+    if (!t) return;
+    setBusy(true);
+    setErr("");
+    try {
+      await api.setHashtags(change._number, [t]);
+      setValue("");
+      await onDone();
+    } catch (e) {
+      setErr((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const remove = async (tag: string) => {
+    setBusy(true);
+    setErr("");
+    try {
+      await api.setHashtags(change._number, [], [tag]);
+      await onDone();
+    } catch (e) {
+      setErr((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Card className="gap-3 py-4">
+      <CardHeader className="px-4 py-0">
+        <CardTitle className="flex items-center gap-1.5 text-sm">
+          <Tag className="size-4 text-muted-foreground" />
+          Hashtags
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="flex flex-col gap-2 px-4">
+        {tags.length === 0 ? (
+          <span className="text-sm text-muted-foreground">No hashtags</span>
+        ) : (
+          <div className="flex flex-wrap gap-1.5">
+            {tags.map((t) => (
+              <Badge key={t} variant="secondary" className="gap-1 text-xs">
+                #{t}
+                {canEdit && (
+                  <button
+                    className="text-muted-foreground hover:text-destructive"
+                    onClick={() => remove(t)}
+                    title="Remove hashtag"
+                    disabled={busy}
+                  >
+                    <X className="size-3" />
+                  </button>
+                )}
+              </Badge>
+            ))}
+          </div>
+        )}
+        {canEdit && (
+          <div className="flex gap-1.5">
+            <Input
+              value={value}
+              onChange={(e) => setValue(e.target.value)}
+              placeholder="add hashtag"
+              className="h-8 text-xs"
+              onKeyDown={(e) => {
+                if (e.key === "Enter") add();
+              }}
+            />
+            <Button size="sm" variant="outline" disabled={busy || !value.trim()} onClick={add}>
+              <Tag className="size-4" />
             </Button>
           </div>
         )}

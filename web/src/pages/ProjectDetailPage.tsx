@@ -1,14 +1,26 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
-import { Bell, BellOff, ChevronRight, File, Folder, GitCommitHorizontal, Terminal } from "lucide-react";
+import { Bell, BellOff, ChevronRight, File, Folder, GitCommitHorizontal, Pencil, Terminal } from "lucide-react";
 import { api, type BranchInfo, type CommitInfo, type FileEntry } from "@/lib/api";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { timeAgo } from "@/lib/utils";
 import { useAuth } from "@/auth";
 import ProjectAccessPanel from "@/pages/ProjectAccessPanel";
 import ProjectSubmitPanel from "@/pages/ProjectSubmitPanel";
+import { BranchesPanel, ManagePanel, TagsPanel } from "@/pages/ProjectRefsPanel";
 import {
   Table,
   TableBody,
@@ -19,6 +31,7 @@ import {
 export default function ProjectDetailPage() {
   const params = useParams();
   const project = decodeURIComponent(params["*"] ?? "");
+  const { user } = useAuth();
   const [searchParams, setSearchParams] = useSearchParams();
   const revision = searchParams.get("revision") ?? "";
   const dirPath = searchParams.get("path") ?? "";
@@ -30,10 +43,18 @@ export default function ProjectDetailPage() {
   const [commits, setCommits] = useState<CommitInfo[] | null>(null);
   const [fileText, setFileText] = useState<string | null>(null);
   const [error, setError] = useState("");
+  const [projectState, setProjectState] = useState("ACTIVE");
+  const [canEdit, setCanEdit] = useState(false);
+  const [editOpen, setEditOpen] = useState(false);
 
   useEffect(() => {
     api.branches(project).then((b) => setBranches(b ?? [])).catch(() => setBranches([]));
+    api.projectConfig(project).then((c) => setProjectState(c.state || "ACTIVE")).catch(() => {});
+    api.projectAccess(project).then((a) => setCanEdit(!!a.can_edit)).catch(() => setCanEdit(false));
   }, [project]);
+
+  const isAdmin = !!user?.admin;
+
 
   const rev = revision || branches[0]?.name || "HEAD";
 
@@ -89,7 +110,14 @@ export default function ProjectDetailPage() {
     <div className="flex flex-col gap-4">
       <div className="flex flex-wrap items-center gap-3">
         <div>
-          <h1 className="text-xl font-semibold">{project}</h1>
+          <h1 className="flex items-center gap-2 text-xl font-semibold">
+            {project}
+            {projectState !== "ACTIVE" && (
+              <span className="rounded-md bg-muted px-2 py-0.5 text-xs font-medium text-muted-foreground">
+                {projectState}
+              </span>
+            )}
+          </h1>
           <div className="mt-1 flex items-center gap-1.5 font-mono text-xs text-muted-foreground">
             <Terminal className="size-3" />
             git clone {window.location.origin}/git/{project}.git
@@ -118,8 +146,11 @@ export default function ProjectDetailPage() {
         <TabsList>
           <TabsTrigger value="files">Files</TabsTrigger>
           <TabsTrigger value="commits">Commits</TabsTrigger>
+          <TabsTrigger value="branches">Branches</TabsTrigger>
+          <TabsTrigger value="tags">Tags</TabsTrigger>
           <TabsTrigger value="submit">Submit</TabsTrigger>
           <TabsTrigger value="access">Access</TabsTrigger>
+          <TabsTrigger value="manage">Manage</TabsTrigger>
         </TabsList>
 
         <TabsContent value="files" className="mt-3">
@@ -133,6 +164,12 @@ export default function ProjectDetailPage() {
                   ← back to files
                 </button>
                 <span className="ml-auto font-mono text-sm">{viewFile}</span>
+                {canEdit && projectState === "ACTIVE" && fileText !== null && (
+                  <Button size="sm" variant="outline" onClick={() => setEditOpen(true)}>
+                    <Pencil className="size-3.5" />
+                    Edit
+                  </Button>
+                )}
               </div>
               {fileText === null ? (
                 <Skeleton className="m-4 h-64 w-auto" />
@@ -258,8 +295,122 @@ export default function ProjectDetailPage() {
         <TabsContent value="access" className="mt-3">
           <ProjectAccessPanel project={project} />
         </TabsContent>
+
+        <TabsContent value="branches" className="mt-3">
+          <BranchesPanel project={project} canEdit={canEdit && projectState === "ACTIVE"} />
+        </TabsContent>
+
+        <TabsContent value="tags" className="mt-3">
+          <TagsPanel project={project} canEdit={canEdit && projectState === "ACTIVE"} />
+        </TabsContent>
+
+        <TabsContent value="manage" className="mt-3">
+          <ManagePanel
+            project={project}
+            state={projectState}
+            isAdmin={isAdmin}
+            onStateChanged={setProjectState}
+          />
+        </TabsContent>
       </Tabs>
+
+      <FileEditDialog
+        open={editOpen}
+        onOpenChange={setEditOpen}
+        project={project}
+        branch={revision || branches[0]?.name || "master"}
+        path={viewFile}
+        initial={fileText ?? ""}
+        onSaved={() => {
+          setEditOpen(false);
+          api.fileText(project, revision || branches[0]?.name || "HEAD", viewFile).then(setFileText).catch(() => {});
+          api.commits(project, revision || undefined).then((d) => setCommits(d ?? [])).catch(() => {});
+        }}
+      />
     </div>
+  );
+}
+
+function FileEditDialog({
+  open,
+  onOpenChange,
+  project,
+  branch,
+  path,
+  initial,
+  onSaved,
+}: {
+  open: boolean;
+  onOpenChange: (v: boolean) => void;
+  project: string;
+  branch: string;
+  path: string;
+  initial: string;
+  onSaved: () => void;
+}) {
+  const [content, setContent] = useState(initial);
+  const [message, setMessage] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    if (open) {
+      setContent(initial);
+      setMessage(`Update ${path}`);
+      setError("");
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, initial, path]);
+
+  const save = async () => {
+    setBusy(true);
+    setError("");
+    try {
+      await api.editFile(project, { branch, path, content, message: message.trim() || undefined });
+      onSaved();
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="sm:max-w-2xl">
+        <DialogHeader>
+          <DialogTitle>Edit {path}</DialogTitle>
+          <DialogDescription>
+            Commits directly to <span className="font-mono">{branch}</span>. You must have push
+            permission on this branch.
+          </DialogDescription>
+        </DialogHeader>
+        <Textarea
+          className="h-72 font-mono text-xs"
+          value={content}
+          onChange={(e) => setContent(e.target.value)}
+          spellCheck={false}
+        />
+        <div className="flex flex-col gap-1">
+          <Label htmlFor="commit-msg" className="text-xs">Commit message</Label>
+          <Input
+            id="commit-msg"
+            className="h-8 text-sm"
+            value={message}
+            onChange={(e) => setMessage(e.target.value)}
+          />
+        </div>
+        {error && <p className="text-sm text-destructive">{error}</p>}
+        <DialogFooter>
+          <Button variant="outline" onClick={() => onOpenChange(false)}>
+            Cancel
+          </Button>
+          <Button onClick={save} disabled={busy}>
+            {busy ? "Committing…" : "Commit change"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
 

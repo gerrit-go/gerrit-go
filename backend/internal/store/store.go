@@ -308,7 +308,21 @@ CREATE TABLE IF NOT EXISTS ssh_keys (
   comment TEXT NOT NULL DEFAULT '',
   created TEXT NOT NULL
 );
-CREATE INDEX IF NOT EXISTS idx_ssh_keys_account ON ssh_keys(account_id, id);`
+CREATE INDEX IF NOT EXISTS idx_ssh_keys_account ON ssh_keys(account_id, id);
+CREATE TABLE IF NOT EXISTS change_hashtags (
+  change_number INTEGER NOT NULL REFERENCES changes(number) ON DELETE CASCADE,
+  hashtag TEXT NOT NULL,
+  added TEXT NOT NULL,
+  PRIMARY KEY (change_number, hashtag)
+);
+CREATE INDEX IF NOT EXISTS idx_hashtags_tag ON change_hashtags(hashtag);
+CREATE TABLE IF NOT EXISTS change_attention (
+  change_number INTEGER NOT NULL REFERENCES changes(number) ON DELETE CASCADE,
+  account_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  reason TEXT NOT NULL DEFAULT '',
+  added TEXT NOT NULL,
+  PRIMARY KEY (change_number, account_id)
+);`
 	if _, err := db.Exec(schema); err != nil {
 		return err
 	}
@@ -317,6 +331,7 @@ CREATE INDEX IF NOT EXISTS idx_ssh_keys_account ON ssh_keys(account_id, id);`
 		{"topic", "topic TEXT NOT NULL DEFAULT ''"},
 		{"work_in_progress", "work_in_progress INTEGER NOT NULL DEFAULT 0"},
 		{"private", "private INTEGER NOT NULL DEFAULT 0"},
+		{"assignee_id", "assignee_id INTEGER NOT NULL DEFAULT 0"},
 	} {
 		if err := addColumnIfMissing(db, "changes", col.name, col.def); err != nil {
 			return err

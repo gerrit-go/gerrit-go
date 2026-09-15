@@ -82,6 +82,14 @@ func (s *Server) routes() {
 	mux.HandleFunc("PUT /projects/{name}/config", s.requireAuth(s.handleSetProjectConfig))
 	mux.HandleFunc("PUT /projects/{name}/watch", s.requireAuth(s.handleWatchProject))
 	mux.HandleFunc("DELETE /projects/{name}/watch", s.requireAuth(s.handleUnwatchProject))
+	mux.HandleFunc("POST /projects/{name}/branches", s.requireAuth(s.handleCreateBranch))
+	mux.HandleFunc("DELETE /projects/{name}/branches/{branch}", s.requireAuth(s.handleDeleteBranch))
+	mux.HandleFunc("GET /projects/{name}/tags", s.handleListTags)
+	mux.HandleFunc("POST /projects/{name}/tags", s.requireAuth(s.handleCreateTag))
+	mux.HandleFunc("DELETE /projects/{name}/tags/{tag}", s.requireAuth(s.handleDeleteTag))
+	mux.HandleFunc("PUT /projects/{name}/edit", s.requireAuth(s.handleEditFile))
+	mux.HandleFunc("PUT /projects/{name}/state", s.requireAuth(s.handleSetProjectState))
+	mux.HandleFunc("DELETE /projects/{name}", s.requireAuth(s.handleDeleteProject))
 
 	// Groups.
 	mux.HandleFunc("GET /groups/", s.handleListGroups)
@@ -120,6 +128,14 @@ func (s *Server) routes() {
 	mux.HandleFunc("DELETE /changes/{num}/wip", s.requireAuth(s.handleClearWIP))
 	mux.HandleFunc("PUT /changes/{num}/star", s.requireAuth(s.handleStar))
 	mux.HandleFunc("DELETE /changes/{num}/star", s.requireAuth(s.handleUnstar))
+	mux.HandleFunc("GET /changes/{num}/hashtags", s.handleListHashtags)
+	mux.HandleFunc("PUT /changes/{num}/hashtags", s.requireAuth(s.handleSetHashtags))
+	mux.HandleFunc("GET /changes/{num}/assignee", s.handleGetAssignee)
+	mux.HandleFunc("PUT /changes/{num}/assignee", s.requireAuth(s.handleSetAssignee))
+	mux.HandleFunc("DELETE /changes/{num}/assignee", s.requireAuth(s.handleDeleteAssignee))
+	mux.HandleFunc("GET /changes/{num}/attention", s.handleListAttention)
+	mux.HandleFunc("PUT /changes/{num}/attention", s.requireAuth(s.handleAddAttention))
+	mux.HandleFunc("DELETE /changes/{num}/attention/{id}", s.requireAuth(s.handleRemoveAttention))
 
 	// Gerrit-compatible authenticated alias prefix: /a/...
 	mux.Handle("/a/", http.StripPrefix("/a", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -779,6 +795,16 @@ func (s *Server) handleChangeDetail(w http.ResponseWriter, r *http.Request) {
 
 	info["labels"] = s.labelsFor(c.Number)
 	info["reviewers"] = s.reviewersFor(c.Number)
+
+	if tags, err := s.db.ListHashtags(c.Number); err == nil && len(tags) > 0 {
+		info["hashtags"] = tags
+	}
+	if a, err := s.db.GetAssignee(c.Number); err == nil && a != nil {
+		info["assignee"] = accountBrief(a)
+	}
+	if att, err := s.db.ListAttention(c.Number); err == nil && len(att) > 0 {
+		info["attention_set"] = attentionInfo(att)
+	}
 
 	// Submit strategy + requirement evaluation.
 	strategy := "REBASE_IF_NECESSARY"

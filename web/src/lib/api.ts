@@ -38,6 +38,14 @@ export interface ChangeInfo {
   revisions?: Record<string, RevisionInfo>;
   labels?: Record<string, LabelInfo>;
   reviewers?: AccountInfo[];
+  hashtags?: string[];
+  assignee?: AccountInfo;
+  attention_set?: AttentionEntry[];
+}
+
+export interface AttentionEntry {
+  account: AccountInfo;
+  reason?: string;
 }
 
 export interface RelationEntry {
@@ -167,6 +175,12 @@ export interface CommitInfo {
 export interface BranchInfo {
   name: string;
   sha: string;
+}
+
+export interface TagInfo {
+  name: string;
+  sha: string;
+  message?: string;
 }
 
 export interface GroupInfo {
@@ -313,6 +327,43 @@ export const api = {
       body: JSON.stringify(body),
     }),
 
+  tags: (project: string) =>
+    request<TagInfo[]>(`/projects/${encodeURIComponent(project)}/tags`),
+  createBranch: (project: string, branch: string, revision?: string) =>
+    request<{ ref: string; revision: string }>(
+      `/projects/${encodeURIComponent(project)}/branches`,
+      { method: "POST", body: JSON.stringify({ branch, revision }) },
+    ),
+  deleteBranch: (project: string, branch: string) =>
+    request<null>(
+      `/projects/${encodeURIComponent(project)}/branches/${encodeURIComponent(branch)}`,
+      { method: "DELETE" },
+    ),
+  createTag: (project: string, tag: string, revision?: string, message?: string) =>
+    request<{ ref: string; revision: string }>(`/projects/${encodeURIComponent(project)}/tags`, {
+      method: "POST",
+      body: JSON.stringify({ tag, revision, message }),
+    }),
+  deleteTag: (project: string, tag: string) =>
+    request<null>(`/projects/${encodeURIComponent(project)}/tags/${encodeURIComponent(tag)}`, {
+      method: "DELETE",
+    }),
+  editFile: (
+    project: string,
+    body: { branch: string; path: string; content: string; message?: string },
+  ) =>
+    request<{ commit: string; branch: string; path: string }>(
+      `/projects/${encodeURIComponent(project)}/edit`,
+      { method: "PUT", body: JSON.stringify(body) },
+    ),
+  setProjectState: (project: string, state: string) =>
+    request<{ name: string; state: string }>(
+      `/projects/${encodeURIComponent(project)}/state`,
+      { method: "PUT", body: JSON.stringify({ state }) },
+    ),
+  deleteProject: (project: string) =>
+    request<null>(`/projects/${encodeURIComponent(project)}`, { method: "DELETE" }),
+
   listGroups: () => request<Record<string, GroupInfo>>("/groups/"),
   createGroup: (name: string, description = "") =>
     request<GroupInfo>("/groups/", { method: "POST", body: JSON.stringify({ name, description }) }),
@@ -423,6 +474,30 @@ export const api = {
     request<{ starred: boolean }>(`/changes/${num}/star`, { method: "PUT" }),
   unstar: (num: number | string) =>
     request<{ starred: boolean }>(`/changes/${num}/star`, { method: "DELETE" }),
+
+  hashtags: (num: number | string) => request<string[]>(`/changes/${num}/hashtags`),
+  setHashtags: (num: number | string, add: string[] = [], remove: string[] = []) =>
+    request<string[]>(`/changes/${num}/hashtags`, {
+      method: "PUT",
+      body: JSON.stringify({ add, remove }),
+    }),
+  assignee: (num: number | string) => request<AccountInfo | null>(`/changes/${num}/assignee`),
+  setAssignee: (num: number | string, assignee: string) =>
+    request<AccountInfo>(`/changes/${num}/assignee`, {
+      method: "PUT",
+      body: JSON.stringify({ assignee }),
+    }),
+  deleteAssignee: (num: number | string) =>
+    request<null>(`/changes/${num}/assignee`, { method: "DELETE" }),
+  attention: (num: number | string) =>
+    request<AttentionEntry[]>(`/changes/${num}/attention`),
+  addAttention: (num: number | string, user: string, reason?: string) =>
+    request<AttentionEntry[]>(`/changes/${num}/attention`, {
+      method: "PUT",
+      body: JSON.stringify({ user, reason }),
+    }),
+  removeAttention: (num: number | string, id: number) =>
+    request<AttentionEntry[]>(`/changes/${num}/attention/${id}`, { method: "DELETE" }),
 
   watchProject: (project: string, notify = "ALL") =>
     request<{ project: string; notify: string; watched: boolean }>(
