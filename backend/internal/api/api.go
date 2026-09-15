@@ -64,6 +64,7 @@ func (s *Server) routes() {
 	mux.HandleFunc("GET /projects/{name}/file", s.handleFileContent)
 	mux.HandleFunc("GET /projects/{name}/access", s.handleGetAccess)
 	mux.HandleFunc("PUT /projects/{name}/access", s.requireAuth(s.handleSetAccess))
+	mux.HandleFunc("PUT /projects/{name}/config", s.requireAuth(s.handleSetProjectConfig))
 
 	// Groups.
 	mux.HandleFunc("GET /groups/", s.handleListGroups)
@@ -85,6 +86,9 @@ func (s *Server) routes() {
 	mux.HandleFunc("GET /changes/{num}/messages", s.handleListMessages)
 	mux.HandleFunc("POST /changes/{num}/review", s.requireAuth(s.handleReview))
 	mux.HandleFunc("POST /changes/{num}/submit", s.requireAuth(s.handleSubmit))
+	mux.HandleFunc("POST /changes/{num}/rebase", s.requireAuth(s.handleRebase))
+	mux.HandleFunc("POST /changes/{num}/cherry_pick", s.requireAuth(s.handleCherryPick))
+	mux.HandleFunc("POST /changes/{num}/revert", s.requireAuth(s.handleRevert))
 	mux.HandleFunc("POST /changes/{num}/abandon", s.requireAuth(s.handleAbandon))
 	mux.HandleFunc("POST /changes/{num}/restore", s.requireAuth(s.handleRestore))
 	mux.HandleFunc("POST /changes/{num}/reviewers", s.requireAuth(s.handleAddReviewer))
@@ -512,7 +516,15 @@ func (s *Server) handleGetProject(w http.ResponseWriter, r *http.Request) {
 	if !s.ensureProjectRead(w, r, name) {
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"name": p.Name, "description": p.Description, "state": p.State})
+	reqs, _ := s.db.ListSubmitRequirements(name)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"name":                p.Name,
+		"description":         p.Description,
+		"state":               p.State,
+		"submit_type":         p.SubmitType,
+		"submit_whole_topic":  p.SubmitWholeTopic,
+		"submit_requirements": reqs,
+	})
 }
 
 func (s *Server) handleListBranches(w http.ResponseWriter, r *http.Request) {
@@ -823,20 +835,34 @@ func (s *Server) handleChangeDetail(w http.ResponseWriter, r *http.Request) {
 	info["labels"] = s.labelsFor(c.Number)
 	info["reviewers"] = s.reviewersFor(c.Number)
 
-	// Submittable hint: has Code-Review +2 and status NEW.
-	submittable := c.Status == "NEW"
-	if submittable {
-		hasPlus2 := false
-		if votes, err := s.db.ListVotes(c.Number); err == nil {
-			for _, v := range votes {
-				if v.Label == "Code-Review" && v.Value == 2 {
-					hasPlus2 = true
-				}
-			}
+	// Submit strategy + requirement evaluation.
+	strategy := "REBASE_IF_NECESSARY"
+	if p, err := s.db.GetProject(c.Project); err == nil && p.SubmitType != "" {
+		strategy = p.SubmitType
+	}
+	info["submit_type"] = strategy
+
+	submittable := false
+	submitBlocked := ""
+	if c.Status == "NEW" {
+		met, reason := s.submitRequirementsMet(c)
+		submittable = met
+		if !met {
+			submitBlocked = reason
+		} else if anc := s.openAncestors(c); len(anc) > 0 {
+			submittable = false
+			submitBlocked = "depends on open changes: " + changeNums(anc)
 		}
-		submittable = hasPlus2
 	}
 	info["submittable"] = submittable
+	if submitBlocked != "" {
+		info["submit_blocked"] = submitBlocked
+	}
+
+	// Relation chain: open ancestors (parents) and the changes this one parents.
+	if chain := s.relationChain(c); len(chain) > 0 {
+		info["relation_chain"] = chain
+	}
 
 	writeJSON(w, http.StatusOK, info)
 }
@@ -1096,6 +1122,9 @@ func (s *Server) handleSubmit(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, "change not found")
 		return
 	}
+	if !s.ensureChangeRead(w, r, c) {
+		return
+	}
 	if c.Status != "NEW" {
 		writeErr(w, http.StatusConflict, "change is not open")
 		return
@@ -1104,30 +1133,286 @@ func (s *Server) handleSubmit(w http.ResponseWriter, r *http.Request) {
 		forbid(w, PermSubmit)
 		return
 	}
-	votes, _ := s.db.ListVotes(c.Number)
-	hasPlus2 := false
-	for _, v := range votes {
-		if v.Label == "Code-Review" && v.Value == 2 {
-			hasPlus2 = true
+
+	strategy, wholeTopic := "REBASE_IF_NECESSARY", false
+	if p, err := s.db.GetProject(c.Project); err == nil {
+		if p.SubmitType != "" {
+			strategy = p.SubmitType
+		}
+		wholeTopic = p.SubmitWholeTopic
+	}
+
+	// Build the submit batch: the change, its open relation-chain ancestors
+	// (Gerrit submits the whole chain, parents first), plus topic siblings and
+	// their ancestors when the project submits whole topics. Every member is
+	// validated up front so a failure never leaves a partially submitted chain.
+	seen := map[int64]bool{}
+	var batch []*store.Change
+	var add func(cs ...*store.Change)
+	add = func(cs ...*store.Change) {
+		for _, x := range cs {
+			if x == nil || seen[x.Number] {
+				continue
+			}
+			seen[x.Number] = true
+			batch = append(batch, x)
+			add(s.openAncestors(x)...)
 		}
 	}
-	if !hasPlus2 {
-		writeErr(w, http.StatusConflict, "change requires Code-Review +2 before it can be submitted")
-		return
+	add(c)
+	if wholeTopic {
+		add(s.topicSiblings(c)...)
 	}
-	if err := s.git.Submit(c.Number); err != nil {
-		writeErr(w, http.StatusConflict, err.Error())
-		return
+	for _, b := range batch {
+		if met, reason := s.submitRequirementsMet(b); !met {
+			writeErr(w, http.StatusConflict, fmt.Sprintf("change %d is not submittable: %s", b.Number, reason))
+			return
+		}
+		if !s.can(acct, b.Project, branchRef(b.Branch), PermSubmit) {
+			forbid(w, PermSubmit)
+			return
+		}
 	}
-	s.db.AddChangeMessage(&store.ChangeMessage{
-		ChangeNum: c.Number, PatchSet: c.CurrentPS, Type: "submitted",
-		AuthorID: acct.ID, Message: "Change merged (fast-forward).",
+
+	// Submit in relation-chain order: a change is eligible once it has no open
+	// ancestors left (parents merge first and then leave the open set).
+	pending := batch
+	mergedCommit := ""
+	var submittedNums []int64
+	for len(pending) > 0 {
+		progress := false
+		for i, b := range pending {
+			if anc := s.openAncestors(b); len(anc) > 0 {
+				continue
+			}
+			sha, err := s.git.SubmitWithType(b.Number, strategy)
+			if err != nil {
+				writeErr(w, http.StatusConflict, fmt.Sprintf("submitting change %d failed: %v", b.Number, err))
+				return
+			}
+			s.db.AddChangeMessage(&store.ChangeMessage{
+				ChangeNum: b.Number, PatchSet: b.CurrentPS, Type: "submitted",
+				AuthorID: acct.ID, Message: fmt.Sprintf("Change merged via %s, commit %s.", strategy, shortSHA(sha)),
+			})
+			submittedNums = append(submittedNums, b.Number)
+			if b.Number == c.Number {
+				mergedCommit = sha
+			}
+			pending = append(pending[:i], pending[i+1:]...)
+			progress = true
+			break
+		}
+		if !progress {
+			blocked := make([]*store.Change, len(pending))
+			copy(blocked, pending)
+			writeErr(w, http.StatusConflict,
+				"cannot determine submit order; changes depend on open ancestors: "+changeNums(blocked))
+			return
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"status": "MERGED", "commit": mergedCommit, "submitted": submittedNums,
 	})
-	writeJSON(w, http.StatusOK, map[string]any{"status": "MERGED"})
 }
 
 func (s *Server) handleAbandon(w http.ResponseWriter, r *http.Request) {
 	s.setChangeStatus(w, r, "ABANDONED", "NEW")
+}
+
+// ---------- rebase / cherry-pick / revert ----------
+
+// canUploadPatchSet reports whether acct may create a new patch set on c: the
+// change owner, an administrator, or anyone with push rights to refs/for/<branch>.
+func (s *Server) canUploadPatchSet(acct *store.Account, c *store.Change) bool {
+	if acct == nil {
+		return false
+	}
+	if acct.ID == c.OwnerID {
+		return true
+	}
+	return s.can(acct, c.Project, "refs/for/"+c.Branch, PermPush)
+}
+
+// recordPatchSet stores nc as a patch set of changeNumber, marks it current and
+// logs an activity message.
+func (s *Server) recordPatchSet(changeNumber int64, acct *store.Account, nc gitsvc.NewCommit, msg string) error {
+	ps := &store.PatchSet{
+		ChangeNumber: changeNumber, Number: nc.NewPatchSet, CommitSHA: nc.SHA,
+		AuthorName: nc.AuthorName, AuthorEmail: nc.AuthorEmail, Message: nc.Message,
+	}
+	if err := s.db.CreatePatchSet(ps); err != nil {
+		return err
+	}
+	if err := s.db.SetCurrentPatchSet(changeNumber, nc.NewPatchSet); err != nil {
+		return err
+	}
+	s.db.AddChangeMessage(&store.ChangeMessage{
+		ChangeNum: changeNumber, PatchSet: nc.NewPatchSet, Type: "patchset-uploaded",
+		AuthorID: acct.ID, Message: msg,
+	})
+	return s.db.TouchChange(changeNumber)
+}
+
+func (s *Server) handleRebase(w http.ResponseWriter, r *http.Request) {
+	acct := s.account(r)
+	num, ok := s.parseChangeNum(r)
+	if !ok {
+		writeErr(w, http.StatusBadRequest, "invalid change number")
+		return
+	}
+	c, err := s.db.GetChange(num)
+	if err != nil {
+		writeErr(w, http.StatusNotFound, "change not found")
+		return
+	}
+	if !s.ensureChangeRead(w, r, c) {
+		return
+	}
+	if c.Status != "NEW" {
+		writeErr(w, http.StatusConflict, "change is not open")
+		return
+	}
+	if !s.canUploadPatchSet(acct, c) {
+		forbid(w, PermPush)
+		return
+	}
+	nc, err := s.git.Rebase(c.Number)
+	if err != nil {
+		writeErr(w, http.StatusConflict, err.Error())
+		return
+	}
+	if err := s.recordPatchSet(c.Number, acct, nc,
+		fmt.Sprintf("Uploaded patch set %d (rebased onto %s).", nc.NewPatchSet, c.Branch)); err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, changeInfo(c))
+}
+
+// startDerivedChange creates a placeholder change row so the git operation has a
+// destination number to push into. On any later failure the orphan is abandoned.
+func (s *Server) startDerivedChange(acct *store.Account, project, branch, subject string) (*store.Change, error) {
+	nc := &store.Change{
+		Project: project, Branch: branch, ChangeID: s.git.GenerateChangeID(),
+		Subject: subject, OwnerID: acct.ID,
+	}
+	if err := s.db.CreateChange(nc); err != nil {
+		return nil, err
+	}
+	if err := s.db.AddReviewer(nc.Number, acct.ID); err != nil {
+		return nil, err
+	}
+	return nc, nil
+}
+
+func (s *Server) abandonOrphan(number int64) {
+	s.db.UpdateChangeStatus(number, "ABANDONED", nil)
+}
+
+func (s *Server) handleCherryPick(w http.ResponseWriter, r *http.Request) {
+	acct := s.account(r)
+	num, ok := s.parseChangeNum(r)
+	if !ok {
+		writeErr(w, http.StatusBadRequest, "invalid change number")
+		return
+	}
+	c, err := s.db.GetChange(num)
+	if err != nil {
+		writeErr(w, http.StatusNotFound, "change not found")
+		return
+	}
+	if !s.ensureChangeRead(w, r, c) {
+		return
+	}
+	var req struct {
+		Destination string `json:"destination"`
+	}
+	if err := decodeJSON(r, &req); err != nil || strings.TrimSpace(req.Destination) == "" {
+		writeErr(w, http.StatusBadRequest, "destination branch is required")
+		return
+	}
+	target := strings.TrimSpace(req.Destination)
+	if !s.can(acct, c.Project, "refs/for/"+target, PermPush) {
+		forbid(w, PermPush)
+		return
+	}
+
+	newChange, err := s.startDerivedChange(acct, c.Project, target, c.Subject)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	nc, err := s.git.CherryPick(c.Number, target, newChange.ChangeID, newChange.Number)
+	if err != nil {
+		s.abandonOrphan(newChange.Number)
+		writeErr(w, http.StatusConflict, err.Error())
+		return
+	}
+	if err := s.recordPatchSet(newChange.Number, acct, nc,
+		fmt.Sprintf("Uploaded patch set %d (cherry-picked from change %d).", nc.NewPatchSet, c.Number)); err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	s.db.AddChangeMessage(&store.ChangeMessage{
+		ChangeNum: newChange.Number, Type: "comment", AuthorID: acct.ID,
+		Message: fmt.Sprintf("Cherry-picked from change %d.", c.Number),
+	})
+	if created, err := s.db.GetChange(newChange.Number); err == nil {
+		writeJSON(w, http.StatusOK, changeInfo(created))
+		return
+	}
+	writeJSON(w, http.StatusOK, changeInfo(newChange))
+}
+
+func (s *Server) handleRevert(w http.ResponseWriter, r *http.Request) {
+	acct := s.account(r)
+	num, ok := s.parseChangeNum(r)
+	if !ok {
+		writeErr(w, http.StatusBadRequest, "invalid change number")
+		return
+	}
+	c, err := s.db.GetChange(num)
+	if err != nil {
+		writeErr(w, http.StatusNotFound, "change not found")
+		return
+	}
+	if !s.ensureChangeRead(w, r, c) {
+		return
+	}
+	if c.Status != "MERGED" {
+		writeErr(w, http.StatusConflict, "only merged changes can be reverted")
+		return
+	}
+	if !s.can(acct, c.Project, "refs/for/"+c.Branch, PermPush) {
+		forbid(w, PermPush)
+		return
+	}
+
+	newChange, err := s.startDerivedChange(acct, c.Project, c.Branch, "Revert \""+c.Subject+"\"")
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	nc, err := s.git.Revert(c.Number, newChange.ChangeID, newChange.Number)
+	if err != nil {
+		s.abandonOrphan(newChange.Number)
+		writeErr(w, http.StatusConflict, err.Error())
+		return
+	}
+	if err := s.recordPatchSet(newChange.Number, acct, nc,
+		fmt.Sprintf("Uploaded patch set %d (revert of change %d).", nc.NewPatchSet, c.Number)); err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	s.db.AddChangeMessage(&store.ChangeMessage{
+		ChangeNum: newChange.Number, Type: "comment", AuthorID: acct.ID,
+		Message: fmt.Sprintf("Reverts change %d.", c.Number),
+	})
+	if created, err := s.db.GetChange(newChange.Number); err == nil {
+		writeJSON(w, http.StatusOK, changeInfo(created))
+		return
+	}
+	writeJSON(w, http.StatusOK, changeInfo(newChange))
 }
 
 func (s *Server) handleRestore(w http.ResponseWriter, r *http.Request) {

@@ -6,6 +6,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Skeleton } from "@/components/ui/skeleton";
 import { timeAgo } from "@/lib/utils";
 import ProjectAccessPanel from "@/pages/ProjectAccessPanel";
+import ProjectSubmitPanel from "@/pages/ProjectSubmitPanel";
 import {
   Table,
   TableBody,
@@ -114,6 +115,7 @@ export default function ProjectDetailPage() {
         <TabsList>
           <TabsTrigger value="files">Files</TabsTrigger>
           <TabsTrigger value="commits">Commits</TabsTrigger>
+          <TabsTrigger value="submit">Submit</TabsTrigger>
           <TabsTrigger value="access">Access</TabsTrigger>
         </TabsList>
 
@@ -244,6 +246,10 @@ export default function ProjectDetailPage() {
               </Table>
             </div>
           )}
+        </TabsContent>
+
+        <TabsContent value="submit" className="mt-3">
+          <ProjectSubmitPanel project={project} />
         </TabsContent>
 
         <TabsContent value="access" className="mt-3">

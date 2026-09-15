@@ -25,11 +25,13 @@ type Session struct {
 }
 
 type Project struct {
-	Name        string    `json:"name"`
-	Description string    `json:"description,omitempty"`
-	Head        string    `json:"-"`
-	State       string    `json:"state"`
-	Created     time.Time `json:"-"`
+	Name             string    `json:"name"`
+	Description      string    `json:"description,omitempty"`
+	Head             string    `json:"-"`
+	State            string    `json:"state"`
+	SubmitType       string    `json:"submit_type"`
+	SubmitWholeTopic bool      `json:"submit_whole_topic"`
+	Created          time.Time `json:"-"`
 }
 
 type Change struct {
@@ -244,6 +246,14 @@ CREATE TABLE IF NOT EXISTS starred (
   change_number INTEGER NOT NULL REFERENCES changes(number) ON DELETE CASCADE,
   added TEXT NOT NULL,
   PRIMARY KEY (account_id, change_number)
+);
+CREATE TABLE IF NOT EXISTS submit_requirements (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  project TEXT NOT NULL,
+  label TEXT NOT NULL,
+  min_value INTEGER NOT NULL DEFAULT 2,
+  block_value INTEGER NOT NULL DEFAULT -2,
+  UNIQUE (project, label)
 );`
 	if _, err := db.Exec(schema); err != nil {
 		return err
@@ -258,8 +268,14 @@ CREATE TABLE IF NOT EXISTS starred (
 			return err
 		}
 	}
-	if err := addColumnIfMissing(db, "projects", "state", "state TEXT NOT NULL DEFAULT 'ACTIVE'"); err != nil {
-		return err
+	for _, col := range []struct{ name, def string }{
+		{"state", "state TEXT NOT NULL DEFAULT 'ACTIVE'"},
+		{"submit_type", "submit_type TEXT NOT NULL DEFAULT 'REBASE_IF_NECESSARY'"},
+		{"submit_whole_topic", "submit_whole_topic INTEGER NOT NULL DEFAULT 0"},
+	} {
+		if err := addColumnIfMissing(db, "projects", col.name, col.def); err != nil {
+			return err
+		}
 	}
 	if err := seedDefaults(db); err != nil {
 		return err
@@ -461,25 +477,31 @@ func (d *DB) CreateProject(p *Project) error {
 	if state == "" {
 		state = "ACTIVE"
 	}
-	_, err := d.db.Exec(`INSERT INTO projects(name, description, head, state, created) VALUES(?,?,?,?,?)`,
-		p.Name, p.Description, p.Head, state, now())
+	submitType := p.SubmitType
+	if submitType == "" {
+		submitType = "REBASE_IF_NECESSARY"
+	}
+	_, err := d.db.Exec(`INSERT INTO projects(name, description, head, state, submit_type, submit_whole_topic, created) VALUES(?,?,?,?,?,?,?)`,
+		p.Name, p.Description, p.Head, state, submitType, b2i(p.SubmitWholeTopic), now())
 	return err
 }
 
 func (d *DB) GetProject(name string) (*Project, error) {
 	p := &Project{}
 	var created string
-	err := d.db.QueryRow(`SELECT name, description, head, state, created FROM projects WHERE name=?`, name).
-		Scan(&p.Name, &p.Description, &p.Head, &p.State, &created)
+	var whole int
+	err := d.db.QueryRow(`SELECT name, description, head, state, submit_type, submit_whole_topic, created FROM projects WHERE name=?`, name).
+		Scan(&p.Name, &p.Description, &p.Head, &p.State, &p.SubmitType, &whole, &created)
 	if err != nil {
 		return nil, err
 	}
+	p.SubmitWholeTopic = whole == 1
 	p.Created = parseTime(created)
 	return p, nil
 }
 
 func (d *DB) ListProjects() ([]*Project, error) {
-	rows, err := d.db.Query(`SELECT name, description, head, state, created FROM projects ORDER BY name`)
+	rows, err := d.db.Query(`SELECT name, description, head, state, submit_type, submit_whole_topic, created FROM projects ORDER BY name`)
 	if err != nil {
 		return nil, err
 	}
@@ -488,13 +510,22 @@ func (d *DB) ListProjects() ([]*Project, error) {
 	for rows.Next() {
 		p := &Project{}
 		var created string
-		if err := rows.Scan(&p.Name, &p.Description, &p.Head, &p.State, &created); err != nil {
+		var whole int
+		if err := rows.Scan(&p.Name, &p.Description, &p.Head, &p.State, &p.SubmitType, &whole, &created); err != nil {
 			return nil, err
 		}
+		p.SubmitWholeTopic = whole == 1
 		p.Created = parseTime(created)
 		out = append(out, p)
 	}
 	return out, rows.Err()
+}
+
+// SetProjectSubmitType updates the submit strategy and whole-topic flag.
+func (d *DB) SetProjectSubmitType(name, submitType string, wholeTopic bool) error {
+	_, err := d.db.Exec(`UPDATE projects SET submit_type=?, submit_whole_topic=? WHERE name=?`,
+		submitType, b2i(wholeTopic), name)
+	return err
 }
 
 func (d *DB) SetProjectState(name, state string) error {

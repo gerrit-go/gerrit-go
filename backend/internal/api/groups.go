@@ -244,3 +244,69 @@ func (s *Server) handleSetAccess(w http.ResponseWriter, r *http.Request) {
 		"can_edit": true,
 	})
 }
+
+var validSubmitTypes = map[string]bool{
+	"FAST_FORWARD_ONLY":   true,
+	"REBASE_IF_NECESSARY": true,
+	"REBASE_ALWAYS":       true,
+	"MERGE_IF_NECESSARY":  true,
+	"MERGE_ALWAYS":        true,
+	"CHERRY_PICK":         true,
+}
+
+// handleSetProjectConfig updates a project's submit strategy, whole-topic flag
+// and submit requirements. Gated by the editAccess permission.
+func (s *Server) handleSetProjectConfig(w http.ResponseWriter, r *http.Request) {
+	acct := s.account(r)
+	name := r.PathValue("name")
+	p, err := s.db.GetProject(name)
+	if err != nil {
+		writeErr(w, http.StatusNotFound, "project not found")
+		return
+	}
+	if !s.canEditAccess(acct, name) {
+		forbid(w, PermEditAccess)
+		return
+	}
+	var req struct {
+		SubmitType         *string                     `json:"submit_type"`
+		SubmitWholeTopic   *bool                       `json:"submit_whole_topic"`
+		SubmitRequirements *[]*store.SubmitRequirement `json:"submit_requirements"`
+	}
+	if err := decodeJSON(r, &req); err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	submitType := p.SubmitType
+	if req.SubmitType != nil {
+		if !validSubmitTypes[*req.SubmitType] {
+			writeErr(w, http.StatusBadRequest, "invalid submit_type")
+			return
+		}
+		submitType = *req.SubmitType
+	}
+	wholeTopic := p.SubmitWholeTopic
+	if req.SubmitWholeTopic != nil {
+		wholeTopic = *req.SubmitWholeTopic
+	}
+	if err := s.db.SetProjectSubmitType(name, submitType, wholeTopic); err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if req.SubmitRequirements != nil {
+		reqs := *req.SubmitRequirements
+		for _, sr := range reqs {
+			sr.Project = name
+		}
+		if err := s.db.SetSubmitRequirements(name, reqs); err != nil {
+			writeErr(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+	}
+	updated, _ := s.db.ListSubmitRequirements(name)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"submit_type":         submitType,
+		"submit_whole_topic":  wholeTopic,
+		"submit_requirements": updated,
+	})
+}

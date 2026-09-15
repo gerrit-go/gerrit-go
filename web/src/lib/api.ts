@@ -24,9 +24,20 @@ export interface ChangeInfo {
   current_revision?: string;
   current_ps?: number;
   submittable?: boolean;
+  submit_type?: string;
+  submit_blocked?: string;
+  relation_chain?: RelationEntry[];
   revisions?: Record<string, RevisionInfo>;
   labels?: Record<string, LabelInfo>;
   reviewers?: AccountInfo[];
+}
+
+export interface RelationEntry {
+  _number: number;
+  subject: string;
+  status: "NEW" | "MERGED" | "ABANDONED";
+  relation: "ancestor" | "self" | "descendant";
+  self?: boolean;
 }
 
 export interface ChangeMessageInfo {
@@ -92,6 +103,32 @@ export interface CommentInfo {
 export interface ProjectInfo {
   name: string;
   description?: string;
+}
+
+export const SUBMIT_TYPES = [
+  "FAST_FORWARD_ONLY",
+  "REBASE_IF_NECESSARY",
+  "REBASE_ALWAYS",
+  "MERGE_IF_NECESSARY",
+  "MERGE_ALWAYS",
+  "CHERRY_PICK",
+] as const;
+
+export interface SubmitRequirement {
+  id?: number;
+  project?: string;
+  label: string;
+  min_value: number;
+  block_value: number;
+}
+
+export interface ProjectConfig {
+  name: string;
+  description?: string;
+  state?: string;
+  submit_type?: string;
+  submit_whole_topic?: boolean;
+  submit_requirements?: SubmitRequirement[];
 }
 
 export interface FileEntry {
@@ -222,6 +259,20 @@ export const api = {
       method: "PUT",
       body: JSON.stringify({ rules }),
     }),
+  projectConfig: (project: string) =>
+    request<ProjectConfig>(`/projects/${encodeURIComponent(project)}`),
+  setProjectConfig: (
+    project: string,
+    body: {
+      submit_type?: string;
+      submit_whole_topic?: boolean;
+      submit_requirements?: SubmitRequirement[];
+    },
+  ) =>
+    request<ProjectConfig>(`/projects/${encodeURIComponent(project)}/config`, {
+      method: "PUT",
+      body: JSON.stringify(body),
+    }),
 
   listGroups: () => request<Record<string, GroupInfo>>("/groups/"),
   createGroup: (name: string, description = "") =>
@@ -303,6 +354,15 @@ export const api = {
   ) => request<{ ok: boolean }>(`/changes/${num}/review`, { method: "POST", body: JSON.stringify(body) }),
   submit: (num: number | string) =>
     request<{ status: string }>(`/changes/${num}/submit`, { method: "POST" }),
+  rebase: (num: number | string) =>
+    request<ChangeInfo>(`/changes/${num}/rebase`, { method: "POST" }),
+  cherryPick: (num: number | string, destination: string) =>
+    request<ChangeInfo>(`/changes/${num}/cherry_pick`, {
+      method: "POST",
+      body: JSON.stringify({ destination }),
+    }),
+  revert: (num: number | string) =>
+    request<ChangeInfo>(`/changes/${num}/revert`, { method: "POST" }),
   abandon: (num: number | string) =>
     request<{ status: string }>(`/changes/${num}/abandon`, { method: "POST" }),
   restore: (num: number | string) =>

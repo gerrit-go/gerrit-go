@@ -9,10 +9,15 @@ import {
   FilePlus2,
   FileText,
   FileX2,
+  GitBranch,
+  GitFork,
+  ListTree,
   MessageSquarePlus,
+  MoreHorizontal,
   Send,
   Tag,
   Trash2,
+  Undo2,
   UserPlus,
   X,
 } from "lucide-react";
@@ -24,6 +29,7 @@ import {
   type CommentInfo,
   type FileDiff,
 } from "@/lib/api";
+import { useNavigate } from "react-router-dom";
 import { useAuth } from "@/auth";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -53,6 +59,7 @@ import { StatusBadge } from "@/pages/ChangesPage";
 export default function ChangeDetailPage() {
   const { num } = useParams();
   const { user } = useAuth();
+  const navigate = useNavigate();
   const [change, setChange] = useState<ChangeInfo | null>(null);
   const [files, setFiles] = useState<FileDiff[] | null>(null);
   const [comments, setComments] = useState<CommentInfo[]>([]);
@@ -60,6 +67,7 @@ export default function ChangeDetailPage() {
   const [patchSet, setPatchSet] = useState<number | "current">("current");
   const [error, setError] = useState("");
   const [actionMsg, setActionMsg] = useState("");
+  const [cherryOpen, setCherryOpen] = useState(false);
 
   const load = useCallback(async () => {
     if (!num) return;
@@ -189,8 +197,8 @@ export default function ChangeDetailPage() {
                 disabled={!change.submittable}
                 title={
                   change.submittable
-                    ? "Submit (fast-forward merge)"
-                    : "Requires Code-Review +2 and must be a fast-forward of the target branch"
+                    ? `Submit (${change.submit_type ?? "REBASE_IF_NECESSARY"})`
+                    : change.submit_blocked || "Change is not submittable yet"
                 }
                 onClick={() => runAction(() => api.submit(change._number), "Change submitted")}
               >
@@ -257,6 +265,57 @@ export default function ChangeDetailPage() {
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
+          {user && (
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button size="sm" variant="secondary">
+                  <MoreHorizontal className="size-4" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="start">
+                {change.status === "NEW" && (
+                  <DropdownMenuItem
+                    onSelect={() =>
+                      runAction(() => api.rebase(change._number), "Rebased onto target branch")
+                    }
+                  >
+                    <GitBranch className="size-4" />
+                    Rebase
+                  </DropdownMenuItem>
+                )}
+                <DropdownMenuItem onSelect={() => setCherryOpen(true)}>
+                  <GitFork className="size-4" />
+                  Cherry-pick
+                </DropdownMenuItem>
+                {change.status === "MERGED" && (
+                  <DropdownMenuItem
+                    onSelect={async () => {
+                      setActionMsg("");
+                      setError("");
+                      try {
+                        const created = await api.revert(change._number);
+                        navigate(`/c/${created._number}`);
+                      } catch (err) {
+                        setError((err as Error).message);
+                      }
+                    }}
+                  >
+                    <Undo2 className="size-4" />
+                    Revert
+                  </DropdownMenuItem>
+                )}
+              </DropdownMenuContent>
+            </DropdownMenu>
+          )}
+          <CherryPickDialog
+            open={cherryOpen}
+            onOpenChange={setCherryOpen}
+            num={change._number}
+            project={change.project}
+            defaultBranch={change.branch}
+            onCreated={(newNum) => navigate(`/c/${newNum}`)}
+            onError={setError}
+          />
           <div className="ml-auto flex items-center gap-2">
             {revisions.length > 1 && (
               <select
@@ -279,6 +338,11 @@ export default function ChangeDetailPage() {
 
         {actionMsg && <p className="text-sm text-emerald-600">{actionMsg}</p>}
         {error && <p className="text-sm text-destructive">{error}</p>}
+        {!error && change.status === "NEW" && change.submit_blocked && (
+          <p className="text-sm text-muted-foreground">
+            Not submittable: {change.submit_blocked}
+          </p>
+        )}
       </div>
 
       <div className="grid gap-5 lg:grid-cols-[1fr_320px]">
@@ -432,11 +496,43 @@ export default function ChangeDetailPage() {
               })}
               <Separator />
               <div className="text-xs text-muted-foreground">
-                Submit requires <span className="font-medium text-foreground">Code-Review +2</span>{" "}
-                and a fast-forward merge.
+                Submit strategy:{" "}
+                <span className="font-medium text-foreground">
+                  {change.submit_type ?? "REBASE_IF_NECESSARY"}
+                </span>
+                . Requires <span className="font-medium text-foreground">Code-Review +2</span>.
               </div>
             </CardContent>
           </Card>
+
+          {change.relation_chain && change.relation_chain.length > 0 && (
+            <Card className="gap-3 py-4">
+              <CardHeader className="px-4 py-0">
+                <CardTitle className="flex items-center gap-1.5 text-sm">
+                  <ListTree className="size-4 text-muted-foreground" />
+                  Relation chain
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="flex flex-col gap-1 px-4 text-sm">
+                {change.relation_chain.map((rel) => (
+                  <Link
+                    key={rel._number}
+                    to={`/c/${rel._number}`}
+                    className={cn(
+                      "flex items-center gap-2 rounded-md px-2 py-1.5 hover:bg-accent",
+                      rel.self && "bg-accent font-medium",
+                    )}
+                  >
+                    <span className="font-mono text-xs text-muted-foreground">#{rel._number}</span>
+                    <span className="truncate">{rel.subject}</span>
+                    <span className="ml-auto shrink-0">
+                      <StatusBadge status={rel.status} />
+                    </span>
+                  </Link>
+                ))}
+              </CardContent>
+            </Card>
+          )}
 
           <Card className="gap-3 py-4">
             <CardHeader className="px-4 py-0">
@@ -686,6 +782,99 @@ function TopicDialog({
           </Button>
           <Button onClick={submit} disabled={busy}>
             {busy ? "Saving…" : "Save"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function CherryPickDialog({
+  open,
+  onOpenChange,
+  num,
+  project,
+  defaultBranch,
+  onCreated,
+  onError,
+}: {
+  open: boolean;
+  onOpenChange: (v: boolean) => void;
+  num: number;
+  project: string;
+  defaultBranch: string;
+  onCreated: (newNum: number) => void;
+  onError: (msg: string) => void;
+}) {
+  const [branches, setBranches] = useState<string[]>([]);
+  const [dest, setDest] = useState(defaultBranch);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+
+  useEffect(() => {
+    if (!open) return;
+    setDest(defaultBranch);
+    setErr("");
+    api
+      .branches(project)
+      .then((b) => setBranches((b ?? []).map((x) => x.name)))
+      .catch(() => setBranches([]));
+  }, [open, project, defaultBranch]);
+
+  const submit = async () => {
+    if (!dest.trim()) return;
+    setBusy(true);
+    setErr("");
+    try {
+      const created = await api.cherryPick(num, dest.trim());
+      onOpenChange(false);
+      onCreated(created._number);
+    } catch (e) {
+      const msg = (e as Error).message;
+      setErr(msg);
+      onError(msg);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="sm:max-w-sm">
+        <DialogHeader>
+          <DialogTitle>Cherry-pick change {num}</DialogTitle>
+          <DialogDescription>
+            Apply this change's current commit onto another branch as a new change.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="flex flex-col gap-2">
+          <label className="text-sm font-medium" htmlFor="cp-dest">
+            Destination branch
+          </label>
+          <Input
+            id="cp-dest"
+            list="cp-branches"
+            value={dest}
+            onChange={(e) => setDest(e.target.value)}
+            placeholder="e.g. release-1.0"
+            autoFocus
+            onKeyDown={(e) => {
+              if (e.key === "Enter") submit();
+            }}
+          />
+          <datalist id="cp-branches">
+            {branches.map((b) => (
+              <option key={b} value={b} />
+            ))}
+          </datalist>
+        </div>
+        {err && <p className="text-sm text-destructive">{err}</p>}
+        <DialogFooter>
+          <Button variant="ghost" onClick={() => onOpenChange(false)}>
+            Cancel
+          </Button>
+          <Button onClick={submit} disabled={busy || !dest.trim()}>
+            {busy ? "Cherry-picking…" : "Cherry-pick"}
           </Button>
         </DialogFooter>
       </DialogContent>

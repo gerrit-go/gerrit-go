@@ -208,6 +208,64 @@ func (d *DB) ListAccessRules(project string) ([]*AccessRule, error) {
 	return out, rows.Err()
 }
 
+// ---------- submit requirements ----------
+
+// SubmitRequirement is a per-project label rule that must be satisfied before a
+// change can be submitted: some reviewer must vote at least MinValue, and no
+// reviewer may vote at or below BlockValue (a veto).
+type SubmitRequirement struct {
+	ID         int64  `json:"id"`
+	Project    string `json:"project"`
+	Label      string `json:"label"`
+	MinValue   int    `json:"min_value"`
+	BlockValue int    `json:"block_value"`
+}
+
+// SetSubmitRequirements replaces a project's submit requirements.
+func (d *DB) SetSubmitRequirements(project string, reqs []*SubmitRequirement) error {
+	tx, err := d.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec(`DELETE FROM submit_requirements WHERE project=?`, project); err != nil {
+		return err
+	}
+	for _, r := range reqs {
+		if _, err := tx.Exec(
+			`INSERT INTO submit_requirements(project, label, min_value, block_value) VALUES(?,?,?,?)`,
+			project, r.Label, r.MinValue, r.BlockValue); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+// ListSubmitRequirements returns a project's submit requirements, falling back
+// to the default Code-Review +2 / -2 veto rule when none are configured.
+func (d *DB) ListSubmitRequirements(project string) ([]*SubmitRequirement, error) {
+	rows, err := d.db.Query(`SELECT id, project, label, min_value, block_value FROM submit_requirements WHERE project=? ORDER BY label`, project)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []*SubmitRequirement
+	for rows.Next() {
+		r := &SubmitRequirement{}
+		if err := rows.Scan(&r.ID, &r.Project, &r.Label, &r.MinValue, &r.BlockValue); err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if len(out) == 0 {
+		out = append(out, &SubmitRequirement{Project: project, Label: "Code-Review", MinValue: 2, BlockValue: -2})
+	}
+	return out, nil
+}
+
 // ---------- starred changes ----------
 
 func (d *DB) StarChange(accountID, changeNumber int64) error {

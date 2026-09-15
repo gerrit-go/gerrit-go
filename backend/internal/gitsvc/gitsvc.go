@@ -17,8 +17,8 @@ import (
 
 	"github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
-	"github.com/go-git/go-git/v5/plumbing/object"
 	fdiff "github.com/go-git/go-git/v5/plumbing/format/diff"
+	"github.com/go-git/go-git/v5/plumbing/object"
 )
 
 var (
@@ -239,44 +239,6 @@ func generateChangeID() string {
 
 // ---------- submit ----------
 
-// Submit fast-forwards the destination branch to the current patch set commit.
-func (s *Service) Submit(changeNumber int64) error {
-	change, err := s.db.GetChange(changeNumber)
-	if err != nil {
-		return err
-	}
-	if change.Status != "NEW" {
-		return ErrNotSubmittable
-	}
-	ps, err := s.db.GetPatchSet(change.Number, change.CurrentPS)
-	if err != nil {
-		return err
-	}
-	repo, err := s.OpenRepo(change.Project)
-	if err != nil {
-		return err
-	}
-	commitHash := plumbing.NewHash(ps.CommitSHA)
-	branchRef := plumbing.NewBranchReferenceName(change.Branch)
-
-	if r, err := repo.Reference(branchRef, true); err == nil {
-		if r.Hash() == commitHash {
-			return s.markSubmitted(change.Number)
-		}
-		ok, err := isAncestor(repo, r.Hash(), commitHash)
-		if err != nil {
-			return err
-		}
-		if !ok {
-			return ErrNotFastForward
-		}
-	}
-	if err := repo.Storer.SetReference(plumbing.NewHashReference(branchRef, commitHash)); err != nil {
-		return err
-	}
-	return s.markSubmitted(change.Number)
-}
-
 func (s *Service) markSubmitted(changeNumber int64) error {
 	t := time.Now()
 	return s.db.UpdateChangeStatus(changeNumber, "MERGED", &t)
@@ -462,18 +424,18 @@ func splitLines(s string) []string {
 // ---------- repository browsing ----------
 
 type FileEntry struct {
-	Name  string `json:"name"`
-	Type  string `json:"type"` // tree | blob
-	Size  int64  `json:"size,omitempty"`
+	Name string `json:"name"`
+	Type string `json:"type"` // tree | blob
+	Size int64  `json:"size,omitempty"`
 }
 
 type CommitInfo struct {
-	SHA       string    `json:"sha"`
-	Author    string    `json:"author"`
-	Email     string    `json:"email"`
-	Date      time.Time `json:"date"`
-	Subject   string    `json:"subject"`
-	Message   string    `json:"message,omitempty"`
+	SHA     string    `json:"sha"`
+	Author  string    `json:"author"`
+	Email   string    `json:"email"`
+	Date    time.Time `json:"date"`
+	Subject string    `json:"subject"`
+	Message string    `json:"message,omitempty"`
 }
 
 type BranchInfo struct {
