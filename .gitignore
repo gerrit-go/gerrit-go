@@ -1,0 +1,13 @@
+# Go
+backend/data/
+backend/server
+*.exe
+
+# Node
+web/node_modules/
+web/dist/
+
+# Editor
+.DS_Store
+.idea/
+.vscode/
