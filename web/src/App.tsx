@@ -1,7 +1,8 @@
 import { Link, NavLink, Route, Routes, useNavigate } from "react-router-dom";
-import { GitPullRequestArrow, FolderGit2, LogOut, Search } from "lucide-react";
+import { GitPullRequestArrow, FolderGit2, LogOut, Search, Sun, Moon, Monitor, Check } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useAuth } from "@/auth";
+import { useTheme, type Theme } from "@/theme";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -18,6 +19,34 @@ import ChangeDetailPage from "@/pages/ChangeDetailPage";
 import ProjectsPage from "@/pages/ProjectsPage";
 import ProjectDetailPage from "@/pages/ProjectDetailPage";
 import LoginPage from "@/pages/LoginPage";
+
+function ThemeToggle() {
+  const { theme, setTheme } = useTheme();
+  const options: { value: Theme; label: string; icon: typeof Sun }[] = [
+    { value: "light", label: "Light", icon: Sun },
+    { value: "dark", label: "Dark", icon: Moon },
+    { value: "system", label: "System", icon: Monitor },
+  ];
+  const CurrentIcon = options.find((o) => o.value === theme)!.icon;
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button variant="ghost" size="icon" aria-label="Select theme">
+          <CurrentIcon className="size-4" />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="w-36">
+        {options.map(({ value, label, icon: Icon }) => (
+          <DropdownMenuItem key={value} onClick={() => setTheme(value)}>
+            <Icon className="size-4" />
+            {label}
+            {theme === value && <Check className="ml-auto size-4" />}
+          </DropdownMenuItem>
+        ))}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
 
 function Header() {
   const { user, signOut, loading } = useAuth();
@@ -88,6 +117,7 @@ function Header() {
             />
           </div>
         </form>
+        <ThemeToggle />
         {loading ? null : user ? (
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
