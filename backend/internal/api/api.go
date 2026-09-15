@@ -90,6 +90,10 @@ func (s *Server) routes() {
 	mux.HandleFunc("GET /changes/{num}/revisions/{ps}/file", s.handleRevisionFileContent)
 	mux.HandleFunc("GET /changes/{num}/revisions/{ps}/patch", s.handleRevisionPatch)
 	mux.HandleFunc("GET /changes/{num}/comments", s.handleListComments)
+	mux.HandleFunc("PUT /changes/{num}/comments/{id}/resolve", s.requireAuth(s.handleResolveComment))
+	mux.HandleFunc("GET /changes/{num}/drafts", s.requireAuth(s.handleListDrafts))
+	mux.HandleFunc("PUT /changes/{num}/drafts", s.requireAuth(s.handlePutDraft))
+	mux.HandleFunc("DELETE /changes/{num}/drafts/{id}", s.requireAuth(s.handleDeleteDraft))
 	mux.HandleFunc("GET /changes/{num}/messages", s.handleListMessages)
 	mux.HandleFunc("POST /changes/{num}/review", s.requireAuth(s.handleReview))
 	mux.HandleFunc("POST /changes/{num}/submit", s.requireAuth(s.handleSubmit))
@@ -1021,6 +1025,7 @@ func (s *Server) handleListComments(w http.ResponseWriter, r *http.Request) {
 			"line":        c.Line,
 			"message":     c.Message,
 			"in_reply_to": c.InReplyTo,
+			"resolved":    c.Resolved,
 			"updated":     c.Created.Format(time.RFC3339),
 			"author": map[string]any{
 				"_account_id": c.AuthorID,
@@ -1120,6 +1125,9 @@ func (s *Server) handleReview(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Publishing a review promotes the author's saved drafts to real comments.
+	published, _ := s.db.PublishDrafts(c.Number, acct.ID)
+
 	if strings.TrimSpace(req.Message) != "" {
 		s.db.AddChangeMessage(&store.ChangeMessage{
 			ChangeNum: c.Number, PatchSet: c.CurrentPS, Type: "comment",
@@ -1134,6 +1142,15 @@ func (s *Server) handleReview(w http.ResponseWriter, r *http.Request) {
 		evType, summary = "comment", strings.TrimSpace(req.Message)
 	} else if len(voteTokens) > 0 {
 		summary = "voted " + strings.Join(voteTokens, ", ")
+	}
+	if published > 0 || len(req.Comments) > 0 {
+		evType = "comment"
+		if strings.TrimSpace(req.Message) == "" {
+			summary = "left inline comments"
+			if len(voteTokens) > 0 {
+				summary = "voted " + strings.Join(voteTokens, ", ") + " and left inline comments"
+			}
+		}
 	}
 	s.notifyChange(c, acct.ID, notify.Event{
 		Type: evType, Message: acct.FullName + " " + summary + " on patch set " +

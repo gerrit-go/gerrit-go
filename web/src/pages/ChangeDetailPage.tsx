@@ -5,6 +5,7 @@ import {
   Check,
   ChevronDown,
   Copy,
+  CornerDownRight,
   EyeOff,
   FilePlus2,
   FileText,
@@ -14,6 +15,7 @@ import {
   ListTree,
   MessageSquarePlus,
   MoreHorizontal,
+  Pencil,
   Send,
   Star,
   Tag,
@@ -27,7 +29,10 @@ import {
   type AccountInfo,
   type ChangeInfo,
   type ChangeMessageInfo,
+  type CommentDraftInfo,
   type CommentInfo,
+  type DiffHunk,
+  type DiffLine,
   type FileDiff,
 } from "@/lib/api";
 import { useNavigate } from "react-router-dom";
@@ -64,8 +69,10 @@ export default function ChangeDetailPage() {
   const [change, setChange] = useState<ChangeInfo | null>(null);
   const [files, setFiles] = useState<FileDiff[] | null>(null);
   const [comments, setComments] = useState<CommentInfo[]>([]);
+  const [drafts, setDrafts] = useState<CommentDraftInfo[]>([]);
   const [messages, setMessages] = useState<ChangeMessageInfo[]>([]);
   const [patchSet, setPatchSet] = useState<number | "current">("current");
+  const [diffMode, setDiffMode] = useState<"unified" | "split">("unified");
   const [error, setError] = useState("");
   const [actionMsg, setActionMsg] = useState("");
   const [cherryOpen, setCherryOpen] = useState(false);
@@ -81,10 +88,14 @@ export default function ChangeDetailPage() {
       setChange(detail);
       setComments(cmts ?? []);
       setMessages(msgs ?? []);
+      if (user) {
+        const dr = await api.listDrafts(num).catch(() => [] as CommentDraftInfo[]);
+        setDrafts(dr ?? []);
+      }
     } catch (err) {
       setError((err as Error).message);
     }
-  }, [num]);
+  }, [num, user]);
 
   useEffect(() => {
     load();
@@ -212,6 +223,7 @@ export default function ChangeDetailPage() {
             <>
               <ReviewDialog
                 num={change._number}
+                draftCount={drafts.length}
                 onDone={async (msg) => {
                   setActionMsg(msg);
                   await load();
@@ -374,13 +386,37 @@ export default function ChangeDetailPage() {
         {/* main column: files + diff */}
         <div className="flex min-w-0 flex-col gap-4">
           <Card className="gap-0 py-0">
-            <CardHeader className="border-b py-3">
+            <CardHeader className="flex-row items-center justify-between border-b py-3">
               <CardTitle className="text-sm">
                 Files{" "}
                 <span className="ml-1 font-normal text-muted-foreground">
                   ({files?.length ?? 0})
                 </span>
+                {drafts.length > 0 && (
+                  <Badge variant="secondary" className="ml-2 gap-1 text-[10px]">
+                    <MessageSquarePlus className="size-3" />
+                    {drafts.length} draft{drafts.length > 1 ? "s" : ""}
+                  </Badge>
+                )}
               </CardTitle>
+              <div className="flex items-center gap-1">
+                <Button
+                  size="sm"
+                  variant={diffMode === "unified" ? "secondary" : "ghost"}
+                  className="h-7 px-2 text-xs"
+                  onClick={() => setDiffMode("unified")}
+                >
+                  Unified
+                </Button>
+                <Button
+                  size="sm"
+                  variant={diffMode === "split" ? "secondary" : "ghost"}
+                  className="h-7 px-2 text-xs"
+                  onClick={() => setDiffMode("split")}
+                >
+                  Split
+                </Button>
+              </div>
             </CardHeader>
             <CardContent className="p-0">
               {files === null ? (
@@ -408,14 +444,12 @@ export default function ChangeDetailPage() {
                       </div>
                       <DiffView
                         file={f}
+                        num={change._number}
+                        mode={diffMode}
                         comments={comments.filter((c) => c.path === f.path)}
+                        drafts={drafts.filter((d) => d.path === f.path)}
                         canComment={!!user && change.status === "NEW"}
-                        onAddComment={async (line, message) => {
-                          await api.review(change._number, {
-                            comments: { [f.path]: [{ line, message }] },
-                          });
-                          await load();
-                        }}
+                        reload={load}
                       />
                     </div>
                   ))}
@@ -951,36 +985,197 @@ function FileStatusIcon({ status }: { status: FileDiff["status"] }) {
   }
 }
 
+type SplitRow = { left: DiffLine | null; right: DiffLine | null };
+
+function splitRows(hunk: DiffHunk): SplitRow[] {
+  const rows: SplitRow[] = [];
+  let dels: DiffLine[] = [];
+  let adds: DiffLine[] = [];
+  const flush = () => {
+    const n = Math.max(dels.length, adds.length);
+    for (let i = 0; i < n; i++) rows.push({ left: dels[i] ?? null, right: adds[i] ?? null });
+    dels = [];
+    adds = [];
+  };
+  for (const line of hunk.lines) {
+    if (line.type === "del") dels.push(line);
+    else if (line.type === "add") adds.push(line);
+    else {
+      flush();
+      rows.push({ left: line, right: line });
+    }
+  }
+  flush();
+  return rows;
+}
+
+interface EditorState {
+  line: number;
+  draftId?: number;
+  message: string;
+  inReplyTo?: number;
+}
+
 function DiffView({
   file,
+  num,
+  mode,
   comments,
+  drafts,
   canComment,
-  onAddComment,
+  reload,
 }: {
   file: FileDiff;
+  num: number;
+  mode: "unified" | "split";
   comments: CommentInfo[];
+  drafts: CommentDraftInfo[];
   canComment: boolean;
-  onAddComment: (line: number, message: string) => Promise<void>;
+  reload: () => Promise<void>;
 }) {
-  const [draftLine, setDraftLine] = useState<number | null>(null);
-  const [draft, setDraft] = useState("");
+  const [editor, setEditor] = useState<EditorState | null>(null);
   const [busy, setBusy] = useState(false);
 
   if (file.binary) {
     return <p className="bg-muted/30 px-4 py-3 text-xs text-muted-foreground">Binary file changed.</p>;
   }
 
-  const submitDraft = async () => {
-    if (draftLine === null || !draft.trim()) return;
+  const itemsFor = (line: DiffLine) => {
+    const cs = comments.filter((c) => c.line !== 0 && (c.line === line.new_no || c.line === line.old_no));
+    const ds = drafts.filter((d) => d.line !== 0 && (d.line === line.new_no || d.line === line.old_no));
+    return { cs, ds };
+  };
+
+  const lineAnchor = (line: DiffLine) => (line.type === "del" ? line.old_no ?? 0 : line.new_no ?? 0);
+
+  // Map each anchor line number to the last (hunk,line) that claims it, so a
+  // comment is rendered once even when a del(old N) and add(new N) collide.
+  const hostFor = new Map<number, string>();
+  file.hunks.forEach((h, hi) =>
+    h.lines.forEach((line, li) => {
+      const a = lineAnchor(line);
+      if (a !== 0) hostFor.set(a, `${hi}:${li}`);
+    }),
+  );
+
+  const openNew = (line: DiffLine) => {
+    if (!canComment) return;
+    const anchor = lineAnchor(line);
+    if (editor?.line === anchor) {
+      setEditor(null);
+      return;
+    }
+    setEditor({ line: anchor, message: "" });
+  };
+
+  const saveDraft = async () => {
+    if (!editor || !editor.message.trim()) return;
     setBusy(true);
     try {
-      await onAddComment(draftLine, draft.trim());
-      setDraft("");
-      setDraftLine(null);
+      await api.putDraft(num, {
+        id: editor.draftId,
+        path: file.path,
+        line: editor.line,
+        message: editor.message.trim(),
+        in_reply_to: editor.inReplyTo,
+      });
+      setEditor(null);
+      await reload();
     } finally {
       setBusy(false);
     }
   };
+
+  const deleteDraft = async (id: number) => {
+    setBusy(true);
+    try {
+      await api.deleteDraft(num, id);
+      if (editor?.draftId === id) setEditor(null);
+      await reload();
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const toggleResolve = async (c: CommentInfo) => {
+    setBusy(true);
+    try {
+      await api.resolveComment(num, c.id, !c.resolved);
+      await reload();
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const renderThread = (cs: CommentInfo[], ds: CommentDraftInfo[], anchor: number) => (
+    <>
+      {cs.map((c) => (
+        <CommentCard
+          key={c.id}
+          comment={c}
+          canComment={canComment}
+          busy={busy}
+          onResolve={() => toggleResolve(c)}
+          onReply={() => setEditor({ line: anchor, message: "", inReplyTo: c.id })}
+        />
+      ))}
+      {ds.map((d) => (
+        <DraftCard
+          key={d.id}
+          draft={d}
+          busy={busy}
+          onEdit={() => setEditor({ line: d.line, draftId: d.id, message: d.message, inReplyTo: d.in_reply_to })}
+          onDelete={() => deleteDraft(d.id)}
+        />
+      ))}
+      {editor?.line === anchor && (
+        <CommentEditor
+          editor={editor}
+          busy={busy}
+          onChange={(m) => setEditor({ ...editor, message: m })}
+          onCancel={() => setEditor(null)}
+          onSave={saveDraft}
+        />
+      )}
+    </>
+  );
+
+  if (mode === "split") {
+    return (
+      <div className="border-t bg-card font-mono text-xs leading-5">
+        {file.hunks.map((hunk, hi) => (
+          <div key={hi}>
+            <div className="bg-blue-50 px-4 py-0.5 text-[11px] text-blue-700 dark:bg-blue-950/40 dark:text-blue-300">
+              {hunk.header}
+            </div>
+            {splitRows(hunk).map((row, ri) => {
+              const anchor = row.right ? lineAnchor(row.right) : row.left ? lineAnchor(row.left) : 0;
+              const cs = comments.filter(
+                (c) => c.line !== 0 && (c.line === row.left?.old_no || c.line === row.right?.new_no),
+              );
+              const ds = drafts.filter(
+                (d) => d.line !== 0 && (d.line === row.left?.old_no || d.line === row.right?.new_no),
+              );
+              return (
+                <div key={ri}>
+                  <div className="grid grid-cols-2">
+                    <SplitCell line={row.left} side="left" onClick={() => row.left && openNew(row.left)} canComment={canComment} />
+                    <SplitCell line={row.right} side="right" onClick={() => row.right && openNew(row.right)} canComment={canComment} />
+                  </div>
+                  {(cs.length > 0 || ds.length > 0 || editor?.line === anchor) && (
+                    <div className="border-y bg-muted/20">{renderThread(cs, ds, anchor)}</div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        ))}
+        {file.hunks.length === 0 && (
+          <p className="px-4 py-3 text-muted-foreground">No textual changes.</p>
+        )}
+      </div>
+    );
+  }
 
   return (
     <div className="overflow-x-auto border-t bg-card font-mono text-xs leading-5">
@@ -990,10 +1185,11 @@ function DiffView({
             {hunk.header}
           </div>
           {hunk.lines.map((line, li) => {
-            const lineNo = line.type === "del" ? line.old_no ?? 0 : line.new_no ?? 0;
-            const lineComments = comments.filter(
-              (c) => (c.line === line.new_no || c.line === line.old_no) && c.line !== 0,
-            );
+            const anchor = lineAnchor(line);
+            const { cs, ds } = itemsFor(line);
+            // A del(old N) and add(new N) share an anchor; render the thread once,
+            // on the last line claiming it (the new/add side).
+            const isHost = hostFor.get(anchor) === `${hi}:${li}`;
             return (
               <div key={li}>
                 <div
@@ -1002,7 +1198,7 @@ function DiffView({
                     line.type === "add" && "bg-emerald-50 dark:bg-emerald-950/30",
                     line.type === "del" && "bg-red-50 dark:bg-red-950/30",
                   )}
-                  onClick={() => canComment && setDraftLine(draftLine === lineNo ? null : lineNo)}
+                  onClick={() => openNew(line)}
                 >
                   <span className="w-12 shrink-0 select-none border-r px-2 text-right text-muted-foreground/70">
                     {line.old_no ?? ""}
@@ -1026,41 +1222,7 @@ function DiffView({
                     </span>
                   )}
                 </div>
-                {lineComments.map((c) => (
-                  <div key={c.id} className="flex min-w-max gap-2 border-y bg-amber-50/70 px-14 py-2 dark:bg-amber-950/20">
-                    <div className="min-w-0 flex-1">
-                      <div className="font-sans text-xs">
-                        <span className="font-semibold">{c.author.name}</span>{" "}
-                        <span className="text-muted-foreground">· PS {c.patch_set} · {timeAgo(c.updated)}</span>
-                      </div>
-                      <p className="whitespace-pre-wrap font-sans text-xs text-muted-foreground">{c.message}</p>
-                    </div>
-                  </div>
-                ))}
-                {draftLine === lineNo && canComment && (
-                  <div className="border-y bg-muted/40 px-14 py-2" onClick={(e) => e.stopPropagation()}>
-                    <Textarea
-                      autoFocus
-                      value={draft}
-                      onChange={(e) => setDraft(e.target.value)}
-                      placeholder={`Comment on line ${lineNo}…`}
-                      className="min-h-14 font-sans text-xs"
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) submitDraft();
-                        if (e.key === "Escape") setDraftLine(null);
-                      }}
-                    />
-                    <div className="mt-1.5 flex justify-end gap-2">
-                      <Button size="sm" variant="ghost" onClick={() => setDraftLine(null)}>
-                        Cancel
-                      </Button>
-                      <Button size="sm" disabled={busy || !draft.trim()} onClick={submitDraft}>
-                        <Send className="size-3.5" />
-                        Comment
-                      </Button>
-                    </div>
-                  </div>
-                )}
+                {isHost && (cs.length > 0 || ds.length > 0 || editor?.line === anchor) && renderThread(cs, ds, anchor)}
               </div>
             );
           })}
@@ -1073,7 +1235,196 @@ function DiffView({
   );
 }
 
-function ReviewDialog({ num, onDone }: { num: number; onDone: (msg: string) => Promise<void> }) {
+function SplitCell({
+  line,
+  side,
+  canComment,
+  onClick,
+}: {
+  line: DiffLine | null;
+  side: "left" | "right";
+  canComment: boolean;
+  onClick: () => void;
+}) {
+  if (!line) {
+    return <div className="min-w-0 border-r bg-muted/20 px-2 last:border-r-0" />;
+  }
+  const no = side === "left" ? line.old_no : line.new_no;
+  const show = side === "left" ? line.type !== "add" : line.type !== "del";
+  return (
+    <div
+      className={cn(
+        "group flex min-w-0 cursor-pointer border-r px-1 hover:bg-accent/60 last:border-r-0",
+        show && line.type === "add" && "bg-emerald-50 dark:bg-emerald-950/30",
+        show && line.type === "del" && "bg-red-50 dark:bg-red-950/30",
+        !show && "bg-muted/10",
+      )}
+      onClick={onClick}
+    >
+      <span className="w-10 shrink-0 select-none text-right text-muted-foreground/70">{show ? no ?? "" : ""}</span>
+      <span
+        className={cn(
+          "w-4 shrink-0 select-none text-center font-bold",
+          show && line.type === "add" && "text-emerald-600",
+          show && line.type === "del" && "text-red-600",
+        )}
+      >
+        {show ? (line.type === "add" ? "+" : line.type === "del" ? "−" : " ") : ""}
+      </span>
+      <span className="whitespace-pre-wrap break-all pr-2">{show ? line.text : ""}</span>
+      {canComment && (
+        <span className="ml-auto hidden shrink-0 items-center text-muted-foreground group-hover:flex">
+          <MessageSquarePlus className="size-3.5" />
+        </span>
+      )}
+    </div>
+  );
+}
+
+function CommentCard({
+  comment,
+  canComment,
+  busy,
+  onResolve,
+  onReply,
+}: {
+  comment: CommentInfo;
+  canComment: boolean;
+  busy: boolean;
+  onResolve: () => void;
+  onReply: () => void;
+}) {
+  return (
+    <div className="flex min-w-max gap-2 border-b bg-amber-50/70 px-14 py-2 last:border-b-0 dark:bg-amber-950/20">
+      <div className="min-w-0 flex-1 font-sans">
+        <div className="flex flex-wrap items-center gap-1.5 text-xs">
+          <span className="font-semibold">{comment.author.name}</span>
+          <span className="text-muted-foreground">
+            · PS {comment.patch_set} · {timeAgo(comment.updated)}
+          </span>
+          {comment.in_reply_to ? (
+            <Badge variant="muted" className="text-[10px]">reply</Badge>
+          ) : comment.resolved ? (
+            <Badge variant="success" className="gap-1 text-[10px]"><Check className="size-3" /> resolved</Badge>
+          ) : null}
+        </div>
+        <p className={cn("whitespace-pre-wrap text-xs text-muted-foreground", comment.resolved && "opacity-60 line-through")}>
+          {comment.message}
+        </p>
+        <div className="mt-1 flex items-center gap-3 text-[11px]">
+          <button
+            className="flex items-center gap-1 text-muted-foreground hover:text-foreground disabled:opacity-50"
+            onClick={onResolve}
+            disabled={busy}
+          >
+            <Check className="size-3" />
+            {comment.resolved ? "Unresolve" : "Resolve"}
+          </button>
+          {canComment && (
+            <button
+              className="flex items-center gap-1 text-muted-foreground hover:text-foreground"
+              onClick={onReply}
+            >
+              <CornerDownRight className="size-3" />
+              Reply
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function DraftCard({
+  draft,
+  busy,
+  onEdit,
+  onDelete,
+}: {
+  draft: CommentDraftInfo;
+  busy: boolean;
+  onEdit: () => void;
+  onDelete: () => void;
+}) {
+  return (
+    <div className="flex min-w-max gap-2 border-b bg-sky-50/70 px-14 py-2 last:border-b-0 dark:bg-sky-950/20">
+      <div className="min-w-0 flex-1 font-sans">
+        <div className="flex items-center gap-1.5 text-xs">
+          <Badge variant="secondary" className="gap-1 text-[10px]">
+            <Pencil className="size-3" /> Draft
+          </Badge>
+          {draft.in_reply_to ? <Badge variant="muted" className="text-[10px]">reply</Badge> : null}
+          <span className="text-muted-foreground">{timeAgo(draft.updated)}</span>
+        </div>
+        <p className="whitespace-pre-wrap text-xs text-muted-foreground">{draft.message}</p>
+        <div className="mt-1 flex items-center gap-3 text-[11px]">
+          <button className="flex items-center gap-1 text-muted-foreground hover:text-foreground" onClick={onEdit}>
+            <Pencil className="size-3" /> Edit
+          </button>
+          <button
+            className="flex items-center gap-1 text-muted-foreground hover:text-destructive disabled:opacity-50"
+            onClick={onDelete}
+            disabled={busy}
+          >
+            <Trash2 className="size-3" /> Discard
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function CommentEditor({
+  editor,
+  busy,
+  onChange,
+  onCancel,
+  onSave,
+}: {
+  editor: EditorState;
+  busy: boolean;
+  onChange: (msg: string) => void;
+  onCancel: () => void;
+  onSave: () => void;
+}) {
+  return (
+    <div className="border-y bg-muted/40 px-14 py-2" onClick={(e) => e.stopPropagation()}>
+      <Textarea
+        autoFocus
+        value={editor.message}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder={editor.inReplyTo ? "Write a reply…" : `Draft a comment on line ${editor.line}…`}
+        className="min-h-14 font-sans text-xs"
+        onKeyDown={(e) => {
+          if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) onSave();
+          if (e.key === "Escape") onCancel();
+        }}
+      />
+      <div className="mt-1.5 flex items-center justify-end gap-2">
+        <span className="mr-auto font-sans text-[11px] text-muted-foreground">
+          Saved as a draft and published with your review.
+        </span>
+        <Button size="sm" variant="ghost" onClick={onCancel}>
+          Cancel
+        </Button>
+        <Button size="sm" disabled={busy || !editor.message.trim()} onClick={onSave}>
+          <Send className="size-3.5" />
+          Save draft
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+function ReviewDialog({
+  num,
+  draftCount,
+  onDone,
+}: {
+  num: number;
+  draftCount: number;
+  onDone: (msg: string) => Promise<void>;
+}) {
   const [open, setOpen] = useState(false);
   const [cr, setCr] = useState(0);
   const [verified, setVerified] = useState(0);
@@ -1107,6 +1458,11 @@ function ReviewDialog({ num, onDone }: { num: number; onDone: (msg: string) => P
         <Button size="sm">
           <VoteChipIcon />
           Review
+          {draftCount > 0 && (
+            <Badge variant="secondary" className="ml-1 px-1.5 text-[10px]">
+              {draftCount}
+            </Badge>
+          )}
         </Button>
       </DialogTrigger>
       <DialogContent className="sm:max-w-md">
@@ -1117,6 +1473,11 @@ function ReviewDialog({ num, onDone }: { num: number; onDone: (msg: string) => P
           </DialogDescription>
         </DialogHeader>
         <div className="flex flex-col gap-4">
+          {draftCount > 0 && (
+            <p className="rounded-md bg-muted px-3 py-2 text-xs text-muted-foreground">
+              {draftCount} draft comment{draftCount > 1 ? "s" : ""} will be published with this review.
+            </p>
+          )}
           <VoteRow label="Code-Review" value={cr} onChange={setCr} options={[-2, -1, 0, 1, 2]} />
           <VoteRow label="Verified" value={verified} onChange={setVerified} options={[-1, 0, 1]} />
           <Textarea

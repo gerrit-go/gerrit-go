@@ -84,6 +84,21 @@ type Comment struct {
 	AuthorUser string    `json:"-"`
 	Created    time.Time `json:"updated"`
 	InReplyTo  int64     `json:"in_reply_to,omitempty"`
+	Resolved   bool      `json:"resolved"`
+}
+
+// CommentDraft is a private, unpublished inline comment owned by one account.
+// Drafts become real comments when the author posts a review.
+type CommentDraft struct {
+	ID        int64     `json:"id"`
+	ChangeNum int64     `json:"-"`
+	PatchSet  int       `json:"patch_set"`
+	AccountID int64     `json:"-"`
+	File      string    `json:"path"`
+	Line      int       `json:"line"`
+	Message   string    `json:"message"`
+	InReplyTo int64     `json:"in_reply_to,omitempty"`
+	Created   time.Time `json:"updated"`
 }
 
 // ChangeMessage is one entry in a change's unified timeline (Gerrit
@@ -197,8 +212,21 @@ CREATE TABLE IF NOT EXISTS comments (
   message TEXT NOT NULL,
   author_id INTEGER NOT NULL REFERENCES accounts(id),
   in_reply_to INTEGER NOT NULL DEFAULT 0,
+  resolved INTEGER NOT NULL DEFAULT 0,
   created TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS comment_drafts (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  change_number INTEGER NOT NULL REFERENCES changes(number) ON DELETE CASCADE,
+  patch_set INTEGER NOT NULL,
+  account_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  file TEXT NOT NULL DEFAULT '',
+  line INTEGER NOT NULL DEFAULT 0,
+  message TEXT NOT NULL,
+  in_reply_to INTEGER NOT NULL DEFAULT 0,
+  created TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_drafts_change ON comment_drafts(change_number, account_id, id);
 CREATE TABLE IF NOT EXISTS change_messages (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   change_number INTEGER NOT NULL REFERENCES changes(number) ON DELETE CASCADE,
@@ -294,6 +322,9 @@ CREATE INDEX IF NOT EXISTS idx_notifications_account ON notifications(account_id
 		if err := addColumnIfMissing(db, "projects", col.name, col.def); err != nil {
 			return err
 		}
+	}
+	if err := addColumnIfMissing(db, "comments", "resolved", "resolved INTEGER NOT NULL DEFAULT 0"); err != nil {
+		return err
 	}
 	if err := seedDefaults(db); err != nil {
 		return err
@@ -874,7 +905,7 @@ func (d *DB) CreateComment(c *Comment) error {
 
 func (d *DB) ListComments(changeNumber int64) ([]*Comment, error) {
 	rows, err := d.db.Query(`
-		SELECT c.id, c.change_number, c.patch_set, c.file, c.line, c.message, c.author_id, c.in_reply_to, c.created,
+		SELECT c.id, c.change_number, c.patch_set, c.file, c.line, c.message, c.author_id, c.in_reply_to, c.resolved, c.created,
 		       a.full_name, a.username
 		FROM comments c JOIN accounts a ON a.id = c.author_id
 		WHERE c.change_number=? ORDER BY c.created`, changeNumber)
@@ -886,14 +917,109 @@ func (d *DB) ListComments(changeNumber int64) ([]*Comment, error) {
 	for rows.Next() {
 		c := &Comment{}
 		var created string
-		if err := rows.Scan(&c.ID, &c.ChangeNum, &c.PatchSet, &c.File, &c.Line, &c.Message, &c.AuthorID, &c.InReplyTo, &created,
+		var resolved int
+		if err := rows.Scan(&c.ID, &c.ChangeNum, &c.PatchSet, &c.File, &c.Line, &c.Message, &c.AuthorID, &c.InReplyTo, &resolved, &created,
 			&c.AuthorName, &c.AuthorUser); err != nil {
 			return nil, err
 		}
+		c.Resolved = resolved != 0
 		c.Created = parseTime(created)
 		out = append(out, c)
 	}
 	return out, rows.Err()
+}
+
+// SetCommentResolved toggles the resolved flag of a comment thread.
+func (d *DB) SetCommentResolved(id int64, resolved bool) error {
+	_, err := d.db.Exec(`UPDATE comments SET resolved=? WHERE id=?`, b2i(resolved), id)
+	return err
+}
+
+// GetComment returns a single comment by ID (without author join).
+func (d *DB) GetComment(id int64) (*Comment, error) {
+	c := &Comment{}
+	var created string
+	var resolved int
+	err := d.db.QueryRow(`
+		SELECT id, change_number, patch_set, file, line, message, author_id, in_reply_to, resolved, created
+		FROM comments WHERE id=?`, id).
+		Scan(&c.ID, &c.ChangeNum, &c.PatchSet, &c.File, &c.Line, &c.Message, &c.AuthorID, &c.InReplyTo, &resolved, &created)
+	if err != nil {
+		return nil, err
+	}
+	c.Resolved = resolved != 0
+	c.Created = parseTime(created)
+	return c, nil
+}
+
+// ---------- comment drafts ----------
+
+func (d *DB) CreateDraft(dr *CommentDraft) error {
+	res, err := d.db.Exec(`
+		INSERT INTO comment_drafts(change_number, patch_set, account_id, file, line, message, in_reply_to, created)
+		VALUES(?,?,?,?,?,?,?,?)`,
+		dr.ChangeNum, dr.PatchSet, dr.AccountID, dr.File, dr.Line, dr.Message, dr.InReplyTo, now())
+	if err != nil {
+		return err
+	}
+	dr.ID, _ = res.LastInsertId()
+	dr.Created = parseTime(now())
+	return nil
+}
+
+func (d *DB) UpdateDraft(accountID, id int64, message string, inReplyTo int64) error {
+	_, err := d.db.Exec(`UPDATE comment_drafts SET message=?, in_reply_to=?, created=? WHERE id=? AND account_id=?`,
+		message, inReplyTo, now(), id, accountID)
+	return err
+}
+
+func (d *DB) DeleteDraft(accountID, id int64) error {
+	_, err := d.db.Exec(`DELETE FROM comment_drafts WHERE id=? AND account_id=?`, id, accountID)
+	return err
+}
+
+func (d *DB) ListDrafts(changeNumber, accountID int64) ([]*CommentDraft, error) {
+	rows, err := d.db.Query(`
+		SELECT id, change_number, patch_set, account_id, file, line, message, in_reply_to, created
+		FROM comment_drafts WHERE change_number=? AND account_id=? ORDER BY id`, changeNumber, accountID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []*CommentDraft
+	for rows.Next() {
+		dr := &CommentDraft{}
+		var created string
+		if err := rows.Scan(&dr.ID, &dr.ChangeNum, &dr.PatchSet, &dr.AccountID, &dr.File, &dr.Line, &dr.Message, &dr.InReplyTo, &created); err != nil {
+			return nil, err
+		}
+		dr.Created = parseTime(created)
+		out = append(out, dr)
+	}
+	return out, rows.Err()
+}
+
+// PublishDrafts converts all of an account's drafts on a change into published
+// comments and deletes the drafts. It returns the number published.
+func (d *DB) PublishDrafts(changeNumber, accountID int64) (int, error) {
+	drafts, err := d.ListDrafts(changeNumber, accountID)
+	if err != nil {
+		return 0, err
+	}
+	n := 0
+	for _, dr := range drafts {
+		if err := d.CreateComment(&Comment{
+			ChangeNum: dr.ChangeNum, PatchSet: dr.PatchSet, File: dr.File,
+			Line: dr.Line, Message: dr.Message, AuthorID: accountID, InReplyTo: dr.InReplyTo,
+		}); err != nil {
+			return n, err
+		}
+		if _, err := d.db.Exec(`DELETE FROM comment_drafts WHERE id=?`, dr.ID); err != nil {
+			return n, err
+		}
+		n++
+	}
+	return n, nil
 }
 
 // ---------- change metadata (topic / WIP / private) ----------

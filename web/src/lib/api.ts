@@ -97,8 +97,19 @@ export interface CommentInfo {
   line: number;
   message: string;
   in_reply_to?: number;
+  resolved?: boolean;
   updated: string;
   author: AccountInfo;
+}
+
+export interface CommentDraftInfo {
+  id: number;
+  patch_set: number;
+  path: string;
+  line: number;
+  message: string;
+  in_reply_to?: number;
+  updated: string;
 }
 
 export interface ProjectInfo {
@@ -345,6 +356,19 @@ export const api = {
     return atob(b64);
   },
   comments: (num: number | string) => request<CommentInfo[]>(`/changes/${num}/comments`),
+  resolveComment: (num: number | string, id: number, resolved: boolean) =>
+    request<{ id: number; resolved: boolean }>(`/changes/${num}/comments/${id}/resolve`, {
+      method: "PUT",
+      body: JSON.stringify({ resolved }),
+    }),
+  listDrafts: (num: number | string) =>
+    request<CommentDraftInfo[]>(`/changes/${num}/drafts`),
+  putDraft: (
+    num: number | string,
+    body: { id?: number; path: string; line: number; message: string; in_reply_to?: number },
+  ) => request<CommentDraftInfo>(`/changes/${num}/drafts`, { method: "PUT", body: JSON.stringify(body) }),
+  deleteDraft: (num: number | string, id: number) =>
+    request<null>(`/changes/${num}/drafts/${id}`, { method: "DELETE" }),
   messages: (num: number | string) =>
     request<ChangeMessageInfo[]>(`/changes/${num}/messages`),
   addReviewer: (num: number | string, reviewer: string) =>
