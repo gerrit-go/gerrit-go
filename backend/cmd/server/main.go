@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"gerrit-go/internal/api"
 	"gerrit-go/internal/auth"
@@ -24,6 +25,14 @@ func main() {
 	smtpUser := flag.String("smtp-user", "", "SMTP username")
 	smtpPass := flag.String("smtp-pass", "", "SMTP password")
 	smtpFrom := flag.String("smtp-from", "", "From address for notification emails")
+	oauthAuthURL := flag.String("oauth-auth-url", "", "OAuth2/OIDC authorization endpoint (empty disables SSO)")
+	oauthTokenURL := flag.String("oauth-token-url", "", "OAuth2/OIDC token endpoint")
+	oauthUserInfoURL := flag.String("oauth-userinfo-url", "", "OAuth2/OIDC userinfo endpoint")
+	oauthClientID := flag.String("oauth-client-id", "", "OAuth2/OIDC client ID")
+	oauthClientSecret := flag.String("oauth-client-secret", "", "OAuth2/OIDC client secret")
+	oauthRedirectURL := flag.String("oauth-redirect-url", "", "OAuth2/OIDC redirect URL (default: <web-url>/oauth/callback)")
+	oauthScopes := flag.String("oauth-scopes", "openid email profile", "OAuth2/OIDC scopes")
+	oauthDomain := flag.String("oauth-domain", "", "restrict SSO login to this email domain (optional)")
 	flag.Parse()
 
 	if err := os.MkdirAll(filepath.Join(*dataDir, "git"), 0o755); err != nil {
@@ -39,6 +48,24 @@ func main() {
 	authSvc := auth.New(db)
 	if created := authSvc.BootstrapAdmin(); created {
 		log.Printf("created initial admin account: username=admin password=secret (change it after first login)")
+	}
+
+	redirectURL := *oauthRedirectURL
+	if redirectURL == "" && *webURL != "" {
+		redirectURL = strings.TrimSuffix(*webURL, "/") + "/oauth/callback"
+	}
+	authSvc.ConfigureOAuth(auth.OAuthConfig{
+		AuthURL:      *oauthAuthURL,
+		TokenURL:     *oauthTokenURL,
+		UserInfoURL:  *oauthUserInfoURL,
+		ClientID:     *oauthClientID,
+		ClientSecret: *oauthClientSecret,
+		RedirectURL:  redirectURL,
+		Scopes:       *oauthScopes,
+		Domain:       *oauthDomain,
+	})
+	if authSvc.OAuthEnabled() {
+		log.Printf("OAuth2/OIDC single sign-on enabled (redirect: %s)", redirectURL)
 	}
 
 	gitSvc := gitsvc.New(filepath.Join(*dataDir, "git"), db)

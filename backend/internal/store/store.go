@@ -300,7 +300,15 @@ CREATE TABLE IF NOT EXISTS notifications (
   read INTEGER NOT NULL DEFAULT 0,
   created TEXT NOT NULL
 );
-CREATE INDEX IF NOT EXISTS idx_notifications_account ON notifications(account_id, read, id);`
+CREATE INDEX IF NOT EXISTS idx_notifications_account ON notifications(account_id, read, id);
+CREATE TABLE IF NOT EXISTS ssh_keys (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  account_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  public_key TEXT NOT NULL,
+  comment TEXT NOT NULL DEFAULT '',
+  created TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_ssh_keys_account ON ssh_keys(account_id, id);`
 	if _, err := db.Exec(schema); err != nil {
 		return err
 	}
@@ -325,6 +333,14 @@ CREATE INDEX IF NOT EXISTS idx_notifications_account ON notifications(account_id
 	}
 	if err := addColumnIfMissing(db, "comments", "resolved", "resolved INTEGER NOT NULL DEFAULT 0"); err != nil {
 		return err
+	}
+	for _, col := range []struct{ name, def string }{
+		{"http_password_hash", "http_password_hash TEXT NOT NULL DEFAULT ''"},
+		{"external_id", "external_id TEXT NOT NULL DEFAULT ''"},
+	} {
+		if err := addColumnIfMissing(db, "accounts", col.name, col.def); err != nil {
+			return err
+		}
 	}
 	if err := seedDefaults(db); err != nil {
 		return err

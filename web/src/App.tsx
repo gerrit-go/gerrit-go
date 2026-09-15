@@ -1,5 +1,5 @@
 import { Link, NavLink, Route, Routes, useNavigate } from "react-router-dom";
-import { GitPullRequestArrow, FolderGit2, LogOut, Search, Sun, Moon, Monitor, Check, Users, LayoutDashboard } from "lucide-react";
+import { GitPullRequestArrow, FolderGit2, LogOut, Search, Sun, Moon, Monitor, Check, Users, LayoutDashboard, Settings } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useAuth } from "@/auth";
 import { useTheme, type Theme } from "@/theme";
@@ -17,6 +17,7 @@ import { cn } from "@/lib/utils";
 import ChangesPage from "@/pages/ChangesPage";
 import ChangeDetailPage from "@/pages/ChangeDetailPage";
 import DashboardPage from "@/pages/DashboardPage";
+import SettingsPage from "@/pages/SettingsPage";
 import ProjectsPage from "@/pages/ProjectsPage";
 import ProjectDetailPage from "@/pages/ProjectDetailPage";
 import GroupsPage from "@/pages/GroupsPage";
@@ -165,6 +166,10 @@ function Header() {
                 <div className="text-xs font-normal text-muted-foreground">@{user.username}</div>
               </DropdownMenuLabel>
               <DropdownMenuSeparator />
+              <DropdownMenuItem onClick={() => navigate("/settings")}>
+                <Settings className="size-4" />
+                Settings
+              </DropdownMenuItem>
               <DropdownMenuItem
                 onClick={async () => {
                   await signOut();
@@ -194,6 +199,7 @@ export default function App() {
         <Routes>
           <Route path="/" element={<ChangesPage />} />
           <Route path="/dashboard" element={<DashboardPage />} />
+          <Route path="/settings" element={<SettingsPage />} />
           <Route path="/login" element={<LoginPage />} />
           <Route path="/projects" element={<ProjectsPage />} />
           <Route path="/projects/*" element={<ProjectDetailPage />} />

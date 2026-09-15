@@ -1,7 +1,8 @@
-import { useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { useEffect, useState } from "react";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { GitPullRequestArrow } from "lucide-react";
 import { useAuth } from "@/auth";
+import { api } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -11,8 +12,19 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 export default function LoginPage() {
   const { signIn, signUp } = useAuth();
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const [oauthEnabled, setOauthEnabled] = useState(false);
+
+  useEffect(() => {
+    api
+      .getConfig()
+      .then((c) => setOauthEnabled(!!c?.auth?.oauth))
+      .catch(() => setOauthEnabled(false));
+    const err = searchParams.get("error");
+    if (err) setError(`Single sign-on failed (${err}).`);
+  }, [searchParams]);
 
   const [loginUser, setLoginUser] = useState("");
   const [loginPass, setLoginPass] = useState("");
@@ -150,6 +162,18 @@ export default function LoginPage() {
           </Tabs>
         </CardContent>
       </Card>
+      {oauthEnabled && (
+        <div className="mt-4 flex w-full max-w-md flex-col items-center gap-3">
+          <div className="flex w-full items-center gap-3 text-xs text-muted-foreground">
+            <span className="h-px flex-1 bg-border" />
+            or
+            <span className="h-px flex-1 bg-border" />
+          </div>
+          <Button asChild variant="outline" className="w-full">
+            <a href="/login/oauth">Sign in with single sign-on</a>
+          </Button>
+        </div>
+      )}
       <p className="mt-4 text-sm text-muted-foreground">
         <Link to="/" className="underline underline-offset-4 hover:text-foreground">
           Continue browsing without signing in

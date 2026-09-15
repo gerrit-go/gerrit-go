@@ -6,6 +6,13 @@ export interface AccountInfo {
   admin?: boolean;
 }
 
+export interface SSHKeyInfo {
+  id: number;
+  public_key: string;
+  comment: string;
+  created: string;
+}
+
 export interface ChangeInfo {
   id: string;
   _number: number;
@@ -438,6 +445,32 @@ export const api = {
       method: "POST",
       body: JSON.stringify(id ? { id } : {}),
     }),
+
+  getConfig: () => request<{ auth: { oauth: boolean } }>("/config"),
+  updateSelf: (body: { name?: string; email?: string }) =>
+    request<AccountInfo>("/accounts/self", { method: "PUT", body: JSON.stringify(body) }),
+  setPassword: (oldPassword: string, newPassword: string) =>
+    request<null>("/accounts/self/password", {
+      method: "PUT",
+      body: JSON.stringify({ old_password: oldPassword, new_password: newPassword }),
+    }),
+  listAccounts: () => request<AccountInfo[]>("/accounts/"),
+  createAccount: (body: { username: string; password: string; name?: string; email?: string }) =>
+    request<AccountInfo>("/accounts/", { method: "POST", body: JSON.stringify(body) }),
+  httpPasswordStatus: () =>
+    request<{ enabled: boolean }>("/accounts/self/http-password"),
+  generateHTTPPassword: () =>
+    request<{ http_password: string }>("/accounts/self/http-password", { method: "PUT" }),
+  clearHTTPPassword: () =>
+    request<null>("/accounts/self/http-password", { method: "DELETE" }),
+  listSSHKeys: () => request<SSHKeyInfo[]>("/accounts/self/sshkeys"),
+  addSSHKey: (key: string) =>
+    request<SSHKeyInfo>("/accounts/self/sshkeys", {
+      method: "POST",
+      body: JSON.stringify({ key }),
+    }),
+  deleteSSHKey: (id: number) =>
+    request<null>(`/accounts/self/sshkeys/${id}`, { method: "DELETE" }),
 };
 
 export { ApiError };
