@@ -1,10 +1,12 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
-import { ChevronRight, File, Folder, GitCommitHorizontal, Terminal } from "lucide-react";
+import { Bell, BellOff, ChevronRight, File, Folder, GitCommitHorizontal, Terminal } from "lucide-react";
 import { api, type BranchInfo, type CommitInfo, type FileEntry } from "@/lib/api";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Button } from "@/components/ui/button";
 import { timeAgo } from "@/lib/utils";
+import { useAuth } from "@/auth";
 import ProjectAccessPanel from "@/pages/ProjectAccessPanel";
 import ProjectSubmitPanel from "@/pages/ProjectSubmitPanel";
 import {
@@ -94,6 +96,7 @@ export default function ProjectDetailPage() {
           </div>
         </div>
         <div className="ml-auto flex items-center gap-2">
+          <WatchButton project={project} />
           <select
             value={revision || branches[0]?.name || ""}
             onChange={(e) => setParam("revision", e.target.value === (branches[0]?.name ?? "") ? "" : e.target.value)}
@@ -257,5 +260,42 @@ export default function ProjectDetailPage() {
         </TabsContent>
       </Tabs>
     </div>
+  );
+}
+
+function WatchButton({ project }: { project: string }) {
+  const { user } = useAuth();
+  const [watched, setWatched] = useState(false);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    if (!user) return;
+    api
+      .listWatched()
+      .then((list) => setWatched((list ?? []).some((w) => w.project === project)))
+      .catch(() => setWatched(false));
+  }, [user, project]);
+
+  if (!user) return null;
+
+  const toggle = async () => {
+    const next = !watched;
+    setWatched(next);
+    setBusy(true);
+    try {
+      if (next) await api.watchProject(project);
+      else await api.unwatchProject(project);
+    } catch {
+      setWatched(!next);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Button size="sm" variant="outline" onClick={toggle} disabled={busy}>
+      {watched ? <Bell className="size-4" /> : <BellOff className="size-4" />}
+      {watched ? "Watching" : "Watch"}
+    </Button>
   );
 }

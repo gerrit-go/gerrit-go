@@ -15,6 +15,7 @@ import {
   MessageSquarePlus,
   MoreHorizontal,
   Send,
+  Star,
   Tag,
   Trash2,
   Undo2,
@@ -145,6 +146,30 @@ export default function ChangeDetailPage() {
               <ArrowLeft />
             </Link>
           </Button>
+          {user && (
+            <button
+              className="mt-0.5 shrink-0 text-muted-foreground transition-colors hover:text-foreground"
+              title={change.starred ? "Unstar change" : "Star change"}
+              aria-label={change.starred ? "Unstar change" : "Star change"}
+              onClick={async () => {
+                const next = !change.starred;
+                setChange({ ...change, starred: next });
+                try {
+                  if (next) await api.star(change._number);
+                  else await api.unstar(change._number);
+                } catch {
+                  setChange({ ...change, starred: !next });
+                }
+              }}
+            >
+              <Star
+                className={cn(
+                  "size-5",
+                  change.starred && "fill-amber-400 text-amber-400",
+                )}
+              />
+            </button>
+          )}
           <div className="min-w-0 flex-1">
             <div className="flex flex-wrap items-center gap-2">
               <h1 className="text-xl font-semibold">{change.subject}</h1>

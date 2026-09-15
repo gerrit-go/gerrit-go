@@ -254,7 +254,25 @@ CREATE TABLE IF NOT EXISTS submit_requirements (
   min_value INTEGER NOT NULL DEFAULT 2,
   block_value INTEGER NOT NULL DEFAULT -2,
   UNIQUE (project, label)
-);`
+);
+CREATE TABLE IF NOT EXISTS watched_projects (
+  account_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  project TEXT NOT NULL,
+  notify TEXT NOT NULL DEFAULT 'ALL',
+  added TEXT NOT NULL,
+  PRIMARY KEY (account_id, project)
+);
+CREATE TABLE IF NOT EXISTS notifications (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  account_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  change_number INTEGER NOT NULL REFERENCES changes(number) ON DELETE CASCADE,
+  type TEXT NOT NULL,
+  message TEXT NOT NULL,
+  actor_id INTEGER,
+  read INTEGER NOT NULL DEFAULT 0,
+  created TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_notifications_account ON notifications(account_id, read, id);`
 	if _, err := db.Exec(schema); err != nil {
 		return err
 	}
@@ -626,8 +644,13 @@ type ChangeQuery struct {
 	HasVote      bool
 	Before       *time.Time
 	After        *time.Time
-	Limit        int
-	Offset       int
+	// StarredAccountID filters to changes starred by this account (is:starred).
+	StarredAccountID int64
+	// WatchedAccountID filters to changes in projects watched by this account
+	// (is:watched).
+	WatchedAccountID int64
+	Limit            int
+	Offset           int
 }
 
 // SearchChanges returns changes matching q plus the total number of matches
@@ -684,6 +707,14 @@ func (d *DB) SearchChanges(q ChangeQuery) ([]*Change, int, error) {
 		like := "%" + q.Text + "%"
 		add(`(ch.subject LIKE ? OR ch.project LIKE ? OR ch.change_id LIKE ? OR CAST(ch.number AS TEXT) LIKE ?)`,
 			like, like, like, like)
+	}
+	if q.StarredAccountID > 0 {
+		add(`EXISTS (SELECT 1 FROM starred st WHERE st.change_number=ch.number AND st.account_id=?)`,
+			q.StarredAccountID)
+	}
+	if q.WatchedAccountID > 0 {
+		add(`EXISTS (SELECT 1 FROM watched_projects wp WHERE wp.project=ch.project AND wp.account_id=?)`,
+			q.WatchedAccountID)
 	}
 
 	whereSQL := ""

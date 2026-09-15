@@ -1,6 +1,7 @@
 package store
 
 import (
+	"database/sql"
 	"time"
 )
 
@@ -302,4 +303,159 @@ func (d *DB) ListStarred(accountID int64) ([]int64, error) {
 		out = append(out, n)
 	}
 	return out, rows.Err()
+}
+
+// ---------- watched projects ----------
+
+// WatchProject records that accountID watches project. notify controls the email
+// verbosity (ALL, NONE, OWN_COMMENTS); only ALL/OWN_COMMENTS generate in-app
+// notifications, NONE is stored but suppressed.
+func (d *DB) WatchProject(accountID int64, project, notify string) error {
+	if notify == "" {
+		notify = "ALL"
+	}
+	_, err := d.db.Exec(
+		`INSERT INTO watched_projects(account_id, project, notify, added) VALUES(?,?,?,?)
+		 ON CONFLICT(account_id, project) DO UPDATE SET notify=excluded.notify`,
+		accountID, project, notify, now())
+	return err
+}
+
+func (d *DB) UnwatchProject(accountID int64, project string) error {
+	_, err := d.db.Exec(`DELETE FROM watched_projects WHERE account_id=? AND project=?`, accountID, project)
+	return err
+}
+
+func (d *DB) IsWatching(accountID int64, project string) bool {
+	var n int
+	_ = d.db.QueryRow(`SELECT COUNT(*) FROM watched_projects WHERE account_id=? AND project=?`,
+		accountID, project).Scan(&n)
+	return n > 0
+}
+
+// WatchSetting returns the notify setting for accountID on project, or "" when
+// the project is not watched.
+func (d *DB) WatchSetting(accountID int64, project string) string {
+	var notify string
+	_ = d.db.QueryRow(`SELECT notify FROM watched_projects WHERE account_id=? AND project=?`,
+		accountID, project).Scan(&notify)
+	return notify
+}
+
+// WatchedProject pairs a project name with its notify setting.
+type WatchedProject struct {
+	Project string `json:"project"`
+	Notify  string `json:"notify"`
+}
+
+func (d *DB) ListWatchedProjects(accountID int64) ([]WatchedProject, error) {
+	rows, err := d.db.Query(`SELECT project, notify FROM watched_projects WHERE account_id=? ORDER BY project`, accountID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []WatchedProject
+	for rows.Next() {
+		var wp WatchedProject
+		if err := rows.Scan(&wp.Project, &wp.Notify); err != nil {
+			return nil, err
+		}
+		out = append(out, wp)
+	}
+	return out, rows.Err()
+}
+
+// ListProjectWatchers returns account IDs watching project, excluding accounts
+// whose notify setting is NONE.
+func (d *DB) ListProjectWatchers(project string) ([]int64, error) {
+	rows, err := d.db.Query(`SELECT account_id FROM watched_projects WHERE project=? AND notify != 'NONE'`, project)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		out = append(out, id)
+	}
+	return out, rows.Err()
+}
+
+// ---------- notifications ----------
+
+// Notification is an in-app event delivered to one account about a change.
+type Notification struct {
+	ID           int64     `json:"id"`
+	AccountID    int64     `json:"-"`
+	ChangeNumber int64     `json:"change_number"`
+	Type         string    `json:"type"`
+	Message      string    `json:"message"`
+	ActorID      int64     `json:"actor_id,omitempty"`
+	Read         bool      `json:"read"`
+	Created      time.Time `json:"created"`
+}
+
+func (d *DB) CreateNotification(n *Notification) error {
+	res, err := d.db.Exec(
+		`INSERT INTO notifications(account_id, change_number, type, message, actor_id, read, created) VALUES(?,?,?,?,?,0,?)`,
+		n.AccountID, n.ChangeNumber, n.Type, n.Message, n.ActorID, now())
+	if err != nil {
+		return err
+	}
+	n.ID, _ = res.LastInsertId()
+	n.Created = parseTime(now())
+	n.Read = false
+	return nil
+}
+
+func (d *DB) ListNotifications(accountID int64, limit int, unreadOnly bool) ([]*Notification, error) {
+	if limit <= 0 || limit > 200 {
+		limit = 50
+	}
+	q := `SELECT id, account_id, change_number, type, message, actor_id, read, created FROM notifications WHERE account_id=?`
+	args := []any{accountID}
+	if unreadOnly {
+		q += ` AND read=0`
+	}
+	q += ` ORDER BY id DESC LIMIT ?`
+	args = append(args, limit)
+	rows, err := d.db.Query(q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []*Notification
+	for rows.Next() {
+		n := &Notification{}
+		var actor sql.NullInt64
+		var read int
+		var created string
+		if err := rows.Scan(&n.ID, &n.AccountID, &n.ChangeNumber, &n.Type, &n.Message, &actor, &read, &created); err != nil {
+			return nil, err
+		}
+		n.ActorID = actor.Int64
+		n.Read = read != 0
+		n.Created = parseTime(created)
+		out = append(out, n)
+	}
+	return out, rows.Err()
+}
+
+func (d *DB) CountUnreadNotifications(accountID int64) int {
+	var n int
+	_ = d.db.QueryRow(`SELECT COUNT(*) FROM notifications WHERE account_id=? AND read=0`, accountID).Scan(&n)
+	return n
+}
+
+func (d *DB) MarkNotificationRead(accountID, id int64) error {
+	_, err := d.db.Exec(`UPDATE notifications SET read=1 WHERE account_id=? AND id=?`, accountID, id)
+	return err
+}
+
+func (d *DB) MarkAllNotificationsRead(accountID int64) error {
+	_, err := d.db.Exec(`UPDATE notifications SET read=1 WHERE account_id=? AND read=0`, accountID)
+	return err
 }

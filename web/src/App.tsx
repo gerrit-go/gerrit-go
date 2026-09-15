@@ -20,6 +20,7 @@ import ProjectsPage from "@/pages/ProjectsPage";
 import ProjectDetailPage from "@/pages/ProjectDetailPage";
 import GroupsPage from "@/pages/GroupsPage";
 import LoginPage from "@/pages/LoginPage";
+import NotificationBell from "@/components/NotificationBell";
 
 function ThemeToggle() {
   const { theme, setTheme } = useTheme();
@@ -133,6 +134,7 @@ function Header() {
           </div>
         </form>
         <ThemeToggle />
+        {!loading && user && <NotificationBell />}
         {loading ? null : user ? (
           <DropdownMenu>
             <DropdownMenuTrigger asChild>

@@ -24,6 +24,7 @@ export interface ChangeInfo {
   current_revision?: string;
   current_ps?: number;
   submittable?: boolean;
+  starred?: boolean;
   submit_type?: string;
   submit_blocked?: string;
   relation_chain?: RelationEntry[];
@@ -180,6 +181,26 @@ export interface AccessRuleInfo {
 export interface ProjectAccess {
   local: AccessRuleInfo[];
   can_edit: boolean;
+}
+
+export interface NotificationInfo {
+  id: number;
+  change_number: number;
+  type: string;
+  message: string;
+  actor_id?: number;
+  read: boolean;
+  created: string;
+}
+
+export interface NotificationList {
+  notifications: NotificationInfo[];
+  unread: number;
+}
+
+export interface WatchedProjectInfo {
+  project: string;
+  notify: string;
 }
 
 class ApiError extends Error {
@@ -367,6 +388,32 @@ export const api = {
     request<{ status: string }>(`/changes/${num}/abandon`, { method: "POST" }),
   restore: (num: number | string) =>
     request<{ status: string }>(`/changes/${num}/restore`, { method: "POST" }),
+  star: (num: number | string) =>
+    request<{ starred: boolean }>(`/changes/${num}/star`, { method: "PUT" }),
+  unstar: (num: number | string) =>
+    request<{ starred: boolean }>(`/changes/${num}/star`, { method: "DELETE" }),
+
+  watchProject: (project: string, notify = "ALL") =>
+    request<{ project: string; notify: string; watched: boolean }>(
+      `/projects/${encodeURIComponent(project)}/watch`,
+      { method: "PUT", body: JSON.stringify({ notify }) },
+    ),
+  unwatchProject: (project: string) =>
+    request<{ project: string; watched: boolean }>(
+      `/projects/${encodeURIComponent(project)}/watch`,
+      { method: "DELETE" },
+    ),
+  listWatched: () => request<WatchedProjectInfo[]>("/accounts/self/watched"),
+
+  listNotifications: (n = 50, unreadOnly = false) =>
+    request<NotificationList>(
+      `/accounts/self/notifications?n=${n}${unreadOnly ? "&unread=1" : ""}`,
+    ),
+  markNotificationsRead: (id?: number) =>
+    request<{ unread: number }>("/accounts/self/notifications/read", {
+      method: "POST",
+      body: JSON.stringify(id ? { id } : {}),
+    }),
 };
 
 export { ApiError };

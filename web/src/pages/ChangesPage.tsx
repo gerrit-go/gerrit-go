@@ -1,11 +1,13 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
+import { Star } from "lucide-react";
 import { api, type ChangeInfo, type LabelInfo } from "@/lib/api";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Skeleton } from "@/components/ui/skeleton";
-import { timeAgo } from "@/lib/utils";
+import { cn, timeAgo } from "@/lib/utils";
+import { useAuth } from "@/auth";
 import {
   Table,
   TableBody,
@@ -65,6 +67,7 @@ const PAGE_SIZE = 25;
 
 export default function ChangesPage() {
   const [searchParams, setSearchParams] = useSearchParams();
+  const { user } = useAuth();
   const q = searchParams.get("q") ?? "";
   const start = Number(searchParams.get("start") ?? "0") || 0;
   const [changes, setChanges] = useState<ChangeInfo[] | null>(null);
@@ -98,6 +101,21 @@ export default function ChangesPage() {
     if (next > 0) params.set("start", String(next));
     else params.delete("start");
     setSearchParams(params);
+  };
+
+  const toggleStar = async (num: number) => {
+    setChanges((xs) =>
+      (xs ?? []).map((c) => (c._number === num ? { ...c, starred: !c.starred } : c)),
+    );
+    const target = changes?.find((c) => c._number === num);
+    try {
+      if (target?.starred) await api.unstar(num);
+      else await api.star(num);
+    } catch {
+      setChanges((xs) =>
+        (xs ?? []).map((c) => (c._number === num ? { ...c, starred: !c.starred } : c)),
+      );
+    }
   };
 
   const setTab = (tab: string) => {
@@ -158,6 +176,7 @@ export default function ChangesPage() {
           <Table>
             <TableHeader>
               <TableRow className="hover:bg-transparent">
+                {user && <TableHead className="w-8" />}
                 <TableHead className="w-16">Number</TableHead>
                 <TableHead>Subject</TableHead>
                 <TableHead className="w-44">Project / Branch</TableHead>
@@ -170,6 +189,21 @@ export default function ChangesPage() {
             <TableBody>
               {changes.map((c) => (
                 <TableRow key={c._number} className="cursor-pointer" onClick={() => (window.location.href = `/c/${c._number}`)}>
+                  {user && (
+                    <TableCell className="pr-0">
+                      <button
+                        className="text-muted-foreground transition-colors hover:text-foreground"
+                        title={c.starred ? "Unstar" : "Star"}
+                        aria-label={c.starred ? "Unstar" : "Star"}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          toggleStar(c._number);
+                        }}
+                      >
+                        <Star className={cn("size-4", c.starred && "fill-amber-400 text-amber-400")} />
+                      </button>
+                    </TableCell>
+                  )}
                   <TableCell className="font-mono text-xs text-muted-foreground">{c._number}</TableCell>
                   <TableCell className="max-w-md font-medium">
                     <div className="flex items-center gap-2">
@@ -240,7 +274,7 @@ function SearchBar({ defaultValue }: { defaultValue: string }) {
     <input
       name="q"
       defaultValue={defaultValue}
-      placeholder="Filter: owner:self reviewer:alice project:foo branch:main topic:rel is:wip has:vote change:42 …"
+      placeholder="Filter: owner:self reviewer:alice project:foo branch:main topic:rel is:wip is:starred is:watched has:vote change:42 …"
       className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-xs transition-[color,box-shadow] outline-none placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
     />
   );

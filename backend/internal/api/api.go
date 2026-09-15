@@ -17,6 +17,7 @@ import (
 
 	"gerrit-go/internal/auth"
 	"gerrit-go/internal/gitsvc"
+	"gerrit-go/internal/notify"
 	"gerrit-go/internal/store"
 )
 
@@ -24,12 +25,13 @@ type Server struct {
 	db     *store.DB
 	auth   *auth.Service
 	git    *gitsvc.Service
+	notify *notify.Notifier
 	static string
 	mux    *http.ServeMux
 }
 
-func NewRouter(db *store.DB, authSvc *auth.Service, gitSvc *gitsvc.Service, staticDir string) http.Handler {
-	s := &Server{db: db, auth: authSvc, git: gitSvc, static: staticDir, mux: http.NewServeMux()}
+func NewRouter(db *store.DB, authSvc *auth.Service, gitSvc *gitsvc.Service, notifier *notify.Notifier, staticDir string) http.Handler {
+	s := &Server{db: db, auth: authSvc, git: gitSvc, notify: notifier, static: staticDir, mux: http.NewServeMux()}
 	s.routes()
 	return s
 }
@@ -51,6 +53,9 @@ func (s *Server) routes() {
 	// Accounts.
 	mux.HandleFunc("GET /accounts/self", s.handleAccountSelf)
 	mux.HandleFunc("PUT /accounts/self/password", s.handleSetPassword)
+	mux.HandleFunc("GET /accounts/self/notifications", s.requireAuth(s.handleListNotifications))
+	mux.HandleFunc("POST /accounts/self/notifications/read", s.requireAuth(s.handleMarkNotificationsRead))
+	mux.HandleFunc("GET /accounts/self/watched", s.requireAuth(s.handleListWatched))
 	mux.HandleFunc("GET /accounts/", s.requireAuth(s.handleListAccounts))
 	mux.HandleFunc("POST /accounts/", s.requireAuth(s.handleCreateAccount))
 
@@ -65,6 +70,8 @@ func (s *Server) routes() {
 	mux.HandleFunc("GET /projects/{name}/access", s.handleGetAccess)
 	mux.HandleFunc("PUT /projects/{name}/access", s.requireAuth(s.handleSetAccess))
 	mux.HandleFunc("PUT /projects/{name}/config", s.requireAuth(s.handleSetProjectConfig))
+	mux.HandleFunc("PUT /projects/{name}/watch", s.requireAuth(s.handleWatchProject))
+	mux.HandleFunc("DELETE /projects/{name}/watch", s.requireAuth(s.handleUnwatchProject))
 
 	// Groups.
 	mux.HandleFunc("GET /groups/", s.handleListGroups)
@@ -97,6 +104,8 @@ func (s *Server) routes() {
 	mux.HandleFunc("DELETE /changes/{num}/topic", s.requireAuth(s.handleDeleteTopic))
 	mux.HandleFunc("PUT /changes/{num}/wip", s.requireAuth(s.handleSetWIP))
 	mux.HandleFunc("DELETE /changes/{num}/wip", s.requireAuth(s.handleClearWIP))
+	mux.HandleFunc("PUT /changes/{num}/star", s.requireAuth(s.handleStar))
+	mux.HandleFunc("DELETE /changes/{num}/star", s.requireAuth(s.handleUnstar))
 
 	// Gerrit-compatible authenticated alias prefix: /a/...
 	mux.Handle("/a/", http.StripPrefix("/a", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -642,8 +651,14 @@ func parseDate(s string) *time.Time {
 
 // parseChangeQuery turns a Gerrit-style query string into a store.ChangeQuery.
 // selfName, when non-empty, resolves owner:self / reviewer:self.
-func parseChangeQuery(q, selfName string) store.ChangeQuery {
+func parseChangeQuery(q string, self *store.Account) store.ChangeQuery {
 	cq := store.ChangeQuery{}
+	selfName := ""
+	var selfID int64
+	if self != nil {
+		selfName = self.Username
+		selfID = self.ID
+	}
 	for _, part := range strings.Fields(q) {
 		key, val, hasColon := strings.Cut(part, ":")
 		if !hasColon {
@@ -694,6 +709,10 @@ func parseChangeQuery(q, selfName string) store.ChangeQuery {
 				cq.Status = "MERGED"
 			case "abandoned":
 				cq.Status = "ABANDONED"
+			case "starred":
+				cq.StarredAccountID = selfID
+			case "watched":
+				cq.WatchedAccountID = selfID
 			}
 		case "has":
 			if strings.EqualFold(val, "vote") {
@@ -715,11 +734,7 @@ func parseChangeQuery(q, selfName string) store.ChangeQuery {
 
 func (s *Server) handleListChanges(w http.ResponseWriter, r *http.Request) {
 	acct := s.optionalAccount(r)
-	selfName := ""
-	if acct != nil {
-		selfName = acct.Username
-	}
-	cq := parseChangeQuery(r.URL.Query().Get("q"), selfName)
+	cq := parseChangeQuery(r.URL.Query().Get("q"), acct)
 	if n, err := strconv.Atoi(r.URL.Query().Get("n")); err == nil && n > 0 {
 		cq.Limit = n
 	}
@@ -747,6 +762,9 @@ func (s *Server) handleListChanges(w http.ResponseWriter, r *http.Request) {
 		info["current_ps"] = c.CurrentPS
 		info["labels"] = s.labelsFor(c.Number)
 		info["reviewers"] = s.reviewersFor(c.Number)
+		if acct != nil {
+			info["starred"] = s.db.IsStarred(acct.ID, c.Number)
+		}
 		out = append(out, info)
 	}
 	writeJSON(w, http.StatusOK, out)
@@ -809,6 +827,9 @@ func (s *Server) handleChangeDetail(w http.ResponseWriter, r *http.Request) {
 	}
 	info := changeInfo(c)
 	info["current_ps"] = c.CurrentPS
+	if acct := s.optionalAccount(r); acct != nil {
+		info["starred"] = s.db.IsStarred(acct.ID, c.Number)
+	}
 	if c.Submitted != nil {
 		info["submitted"] = c.Submitted.Format(time.RFC3339)
 	}
@@ -1107,6 +1128,19 @@ func (s *Server) handleReview(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.db.TouchChange(c.Number)
+
+	evType, summary := "review", "left a review"
+	if strings.TrimSpace(req.Message) != "" {
+		evType, summary = "comment", strings.TrimSpace(req.Message)
+	} else if len(voteTokens) > 0 {
+		summary = "voted " + strings.Join(voteTokens, ", ")
+	}
+	s.notifyChange(c, acct.ID, notify.Event{
+		Type: evType, Message: acct.FullName + " " + summary + " on patch set " +
+			strconv.Itoa(c.CurrentPS) + ".",
+		NotifyOwner: true, IncludeReviewers: true,
+	})
+
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
@@ -1193,6 +1227,12 @@ func (s *Server) handleSubmit(w http.ResponseWriter, r *http.Request) {
 			s.db.AddChangeMessage(&store.ChangeMessage{
 				ChangeNum: b.Number, PatchSet: b.CurrentPS, Type: "submitted",
 				AuthorID: acct.ID, Message: fmt.Sprintf("Change merged via %s, commit %s.", strategy, shortSHA(sha)),
+			})
+			s.notifyChange(b, acct.ID, notify.Event{
+				Type:             "submitted",
+				Message:          acct.FullName + " submitted this change (" + strategy + ", commit " + shortSHA(sha) + ").",
+				NotifyOwner:      true,
+				IncludeReviewers: true,
 			})
 			submittedNums = append(submittedNums, b.Number)
 			if b.Number == c.Number {
@@ -1454,6 +1494,12 @@ func (s *Server) setChangeStatus(w http.ResponseWriter, r *http.Request, to, req
 		ChangeNum: c.Number, PatchSet: c.CurrentPS, Type: msgType,
 		AuthorID: acct.ID, Message: msgText,
 	})
+	s.notifyChange(c, acct.ID, notify.Event{
+		Type:             msgType,
+		Message:          acct.FullName + " " + strings.ToLower(msgText),
+		NotifyOwner:      true,
+		IncludeReviewers: true,
+	})
 	writeJSON(w, http.StatusOK, map[string]any{"status": to})
 }
 
@@ -1551,6 +1597,11 @@ func (s *Server) handleAddReviewer(w http.ResponseWriter, r *http.Request) {
 		Message: fmt.Sprintf("Added reviewer %s.", orDefault(target.FullName, target.Username)),
 	})
 	s.db.TouchChange(c.Number)
+	s.notifyChange(c, acct.ID, notify.Event{
+		Type:            "reviewer-added",
+		Message:         acct.FullName + " added you as a reviewer.",
+		ExtraRecipients: []int64{target.ID},
+	})
 	writeJSON(w, http.StatusOK, s.reviewersFor(c.Number))
 }
 
