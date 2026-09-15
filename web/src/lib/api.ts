@@ -18,11 +18,24 @@ export interface ChangeInfo {
   created: string;
   updated: string;
   submitted?: string;
+  topic?: string;
+  work_in_progress?: boolean;
+  private?: boolean;
   current_revision?: string;
   current_ps?: number;
   submittable?: boolean;
   revisions?: Record<string, RevisionInfo>;
   labels?: Record<string, LabelInfo>;
+  reviewers?: AccountInfo[];
+}
+
+export interface ChangeMessageInfo {
+  id: number;
+  type: string;
+  patch_set: number;
+  message: string;
+  date: string;
+  author?: AccountInfo;
 }
 
 export interface RevisionInfo {
@@ -172,6 +185,31 @@ export const api = {
   },
 
   listChanges: (q = "") => request<ChangeInfo[]>(`/changes/?q=${encodeURIComponent(q)}`),
+  listChangesPaged: async (
+    q = "",
+    n = 50,
+    start = 0,
+  ): Promise<{ items: ChangeInfo[]; total: number }> => {
+    const params = new URLSearchParams();
+    if (q) params.set("q", q);
+    params.set("n", String(n));
+    if (start > 0) params.set("start", String(start));
+    const res = await fetch(`/changes/?${params.toString()}`, { credentials: "include" });
+    const text = await res.text();
+    const payload = text.startsWith(")]}'") ? text.slice(text.indexOf("\n") + 1) : text;
+    if (!res.ok) {
+      let msg = `${res.status} ${res.statusText}`;
+      try {
+        msg = (JSON.parse(payload) as { error?: string }).error || msg;
+      } catch {
+        /* ignore */
+      }
+      throw new ApiError(res.status, msg);
+    }
+    const total = Number(res.headers.get("X-Total-Count") ?? "0");
+    const items = payload.trim() ? (JSON.parse(payload) as ChangeInfo[]) : [];
+    return { items, total };
+  },
   changeDetail: (num: number | string) => request<ChangeInfo>(`/changes/${num}`),
   revisions: (num: number | string) => request<RevisionInfo[]>(`/changes/${num}/revisions`),
   revisionFiles: (num: number | string, ps: number | "current" = "current") =>
@@ -181,6 +219,26 @@ export const api = {
     return atob(b64);
   },
   comments: (num: number | string) => request<CommentInfo[]>(`/changes/${num}/comments`),
+  messages: (num: number | string) =>
+    request<ChangeMessageInfo[]>(`/changes/${num}/messages`),
+  addReviewer: (num: number | string, reviewer: string) =>
+    request<AccountInfo[]>(`/changes/${num}/reviewers`, {
+      method: "POST",
+      body: JSON.stringify({ reviewer }),
+    }),
+  removeReviewer: (num: number | string, id: number) =>
+    request<AccountInfo[]>(`/changes/${num}/reviewers/${id}`, { method: "DELETE" }),
+  setTopic: (num: number | string, topic: string) =>
+    request<{ topic: string }>(`/changes/${num}/topic`, {
+      method: "PUT",
+      body: JSON.stringify({ topic }),
+    }),
+  deleteTopic: (num: number | string) =>
+    request<null>(`/changes/${num}/topic`, { method: "DELETE" }),
+  setWIP: (num: number | string) =>
+    request<{ work_in_progress: boolean }>(`/changes/${num}/wip`, { method: "PUT" }),
+  clearWIP: (num: number | string) =>
+    request<{ work_in_progress: boolean }>(`/changes/${num}/wip`, { method: "DELETE" }),
   review: (
     num: number | string,
     body: {

@@ -2,6 +2,7 @@ package store
 
 import (
 	"database/sql"
+	"strings"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -31,20 +32,23 @@ type Project struct {
 }
 
 type Change struct {
-	Number      int64     `json:"_number"`
-	Project     string    `json:"project"`
-	Branch      string    `json:"branch"`
-	ChangeID    string    `json:"change_id"`
-	Subject     string    `json:"subject"`
-	OwnerID     int64     `json:"-"`
-	Status      string    `json:"status"` // NEW, MERGED, ABANDONED
-	Created     time.Time `json:"created"`
-	Updated     time.Time `json:"updated"`
-	Submitted   *time.Time `json:"submitted,omitempty"`
-	CurrentPS   int       `json:"-"`
-	OwnerName   string    `json:"-"`
-	OwnerEmail  string    `json:"-"`
-	OwnerUser   string    `json:"-"`
+	Number         int64      `json:"_number"`
+	Project        string     `json:"project"`
+	Branch         string     `json:"branch"`
+	ChangeID       string     `json:"change_id"`
+	Subject        string     `json:"subject"`
+	OwnerID        int64      `json:"-"`
+	Status         string     `json:"status"` // NEW, MERGED, ABANDONED
+	Topic          string     `json:"topic,omitempty"`
+	WorkInProgress bool       `json:"work_in_progress,omitempty"`
+	Private        bool       `json:"private,omitempty"`
+	Created        time.Time  `json:"created"`
+	Updated        time.Time  `json:"updated"`
+	Submitted      *time.Time `json:"submitted,omitempty"`
+	CurrentPS      int        `json:"-"`
+	OwnerName      string     `json:"-"`
+	OwnerEmail     string     `json:"-"`
+	OwnerUser      string     `json:"-"`
 }
 
 type PatchSet struct {
@@ -77,6 +81,31 @@ type Comment struct {
 	AuthorUser string    `json:"-"`
 	Created    time.Time `json:"updated"`
 	InReplyTo  int64     `json:"in_reply_to,omitempty"`
+}
+
+// ChangeMessage is one entry in a change's unified timeline (Gerrit
+// "change messages"): patch set uploads, votes, cover comments, reviewer
+// changes, topic/WIP edits and status transitions.
+type ChangeMessage struct {
+	ID         int64     `json:"id"`
+	ChangeNum  int64     `json:"-"`
+	PatchSet   int       `json:"patch_set"`
+	Type       string    `json:"type"` // patchset-uploaded | vote | comment | reviewer-added | reviewer-removed | topic | wip | submitted | abandoned | restored
+	AuthorID   int64     `json:"-"`
+	AuthorName string    `json:"-"`
+	AuthorUser string    `json:"-"`
+	Message    string    `json:"message"`
+	Created    time.Time `json:"date"`
+}
+
+// Reviewer is an account asked to review a change.
+type Reviewer struct {
+	ChangeNumber int64     `json:"-"`
+	AccountID    int64     `json:"_account_id"`
+	Name         string    `json:"name"`
+	Username     string    `json:"username"`
+	Email        string    `json:"email,omitempty"`
+	Added        time.Time `json:"-"`
 }
 
 func Open(path string) (*DB, error) {
@@ -128,12 +157,16 @@ CREATE TABLE IF NOT EXISTS changes (
   subject TEXT NOT NULL DEFAULT '',
   owner_id INTEGER NOT NULL REFERENCES accounts(id),
   status TEXT NOT NULL DEFAULT 'NEW',
+  topic TEXT NOT NULL DEFAULT '',
+  work_in_progress INTEGER NOT NULL DEFAULT 0,
+  private INTEGER NOT NULL DEFAULT 0,
   current_ps INTEGER NOT NULL DEFAULT 0,
   created TEXT NOT NULL,
   updated TEXT NOT NULL,
   submitted TEXT
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_changes_cid ON changes(project, branch, change_id);
+CREATE INDEX IF NOT EXISTS idx_changes_topic ON changes(topic);
 CREATE TABLE IF NOT EXISTS patchsets (
   change_number INTEGER NOT NULL REFERENCES changes(number) ON DELETE CASCADE,
   number INTEGER NOT NULL,
@@ -162,8 +195,62 @@ CREATE TABLE IF NOT EXISTS comments (
   author_id INTEGER NOT NULL REFERENCES accounts(id),
   in_reply_to INTEGER NOT NULL DEFAULT 0,
   created TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS change_messages (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  change_number INTEGER NOT NULL REFERENCES changes(number) ON DELETE CASCADE,
+  patch_set INTEGER NOT NULL DEFAULT 0,
+  type TEXT NOT NULL,
+  author_id INTEGER NOT NULL DEFAULT 0,
+  message TEXT NOT NULL DEFAULT '',
+  created TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_messages_change ON change_messages(change_number, id);
+CREATE TABLE IF NOT EXISTS reviewers (
+  change_number INTEGER NOT NULL REFERENCES changes(number) ON DELETE CASCADE,
+  account_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  added TEXT NOT NULL,
+  PRIMARY KEY (change_number, account_id)
 );`
-	_, err := db.Exec(schema)
+	if _, err := db.Exec(schema); err != nil {
+		return err
+	}
+	// Upgrade databases created before topic/WIP/private existed.
+	for _, col := range []struct{ name, def string }{
+		{"topic", "topic TEXT NOT NULL DEFAULT ''"},
+		{"work_in_progress", "work_in_progress INTEGER NOT NULL DEFAULT 0"},
+		{"private", "private INTEGER NOT NULL DEFAULT 0"},
+	} {
+		if err := addColumnIfMissing(db, "changes", col.name, col.def); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// addColumnIfMissing adds a column to a table when an older schema lacks it.
+func addColumnIfMissing(db *sql.DB, table, column, def string) error {
+	rows, err := db.Query(`PRAGMA table_info(` + table + `)`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var cid int
+		var name, ctype string
+		var notnull, pk int
+		var dflt sql.NullString
+		if err := rows.Scan(&cid, &name, &ctype, &notnull, &dflt, &pk); err != nil {
+			return err
+		}
+		if name == column {
+			return nil
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	_, err = db.Exec(`ALTER TABLE ` + table + ` ADD COLUMN ` + def)
 	return err
 }
 
@@ -319,8 +406,8 @@ func (d *DB) ListProjects() ([]*Project, error) {
 
 func (d *DB) CreateChange(c *Change) error {
 	res, err := d.db.Exec(
-		`INSERT INTO changes(project, branch, change_id, subject, owner_id, status, current_ps, created, updated) VALUES(?,?,?,?,?,?,?,?,?)`,
-		c.Project, c.Branch, c.ChangeID, c.Subject, c.OwnerID, "NEW", c.CurrentPS, now(), now())
+		`INSERT INTO changes(project, branch, change_id, subject, owner_id, status, topic, work_in_progress, private, current_ps, created, updated) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`,
+		c.Project, c.Branch, c.ChangeID, c.Subject, c.OwnerID, "NEW", c.Topic, b2i(c.WorkInProgress), b2i(c.Private), c.CurrentPS, now(), now())
 	if err != nil {
 		return err
 	}
@@ -335,17 +422,49 @@ func (d *DB) GetChange(number int64) (*Change, error) {
 	c := &Change{}
 	var created, updated string
 	var submitted sql.NullString
+	var wip, priv int
 	err := d.db.QueryRow(`
 		SELECT ch.number, ch.project, ch.branch, ch.change_id, ch.subject, ch.owner_id, ch.status,
+		       ch.topic, ch.work_in_progress, ch.private,
 		       ch.current_ps, ch.created, ch.updated, ch.submitted,
 		       a.full_name, a.email, a.username
 		FROM changes ch JOIN accounts a ON a.id = ch.owner_id WHERE ch.number=?`, number).
 		Scan(&c.Number, &c.Project, &c.Branch, &c.ChangeID, &c.Subject, &c.OwnerID, &c.Status,
+			&c.Topic, &wip, &priv,
 			&c.CurrentPS, &created, &updated, &submitted,
 			&c.OwnerName, &c.OwnerEmail, &c.OwnerUser)
 	if err != nil {
 		return nil, err
 	}
+	c.WorkInProgress = wip == 1
+	c.Private = priv == 1
+	c.Created = parseTime(created)
+	c.Updated = parseTime(updated)
+	c.Submitted = parseTimePtr(submitted)
+	return c, nil
+}
+
+// changeCols is the shared SELECT column list for change queries (alias ch
+// for changes, a for the owner account).
+const changeCols = `ch.number, ch.project, ch.branch, ch.change_id, ch.subject, ch.owner_id, ch.status,
+       ch.topic, ch.work_in_progress, ch.private,
+       ch.current_ps, ch.created, ch.updated, ch.submitted,
+       a.full_name, a.email, a.username`
+
+// scanChange maps a change row (using changeCols ordering) into a *Change.
+func scanChange(scan func(dest ...any) error) (*Change, error) {
+	c := &Change{}
+	var created, updated string
+	var submitted sql.NullString
+	var wip, priv int
+	if err := scan(&c.Number, &c.Project, &c.Branch, &c.ChangeID, &c.Subject, &c.OwnerID, &c.Status,
+		&c.Topic, &wip, &priv,
+		&c.CurrentPS, &created, &updated, &submitted,
+		&c.OwnerName, &c.OwnerEmail, &c.OwnerUser); err != nil {
+		return nil, err
+	}
+	c.WorkInProgress = wip == 1
+	c.Private = priv == 1
 	c.Created = parseTime(created)
 	c.Updated = parseTime(updated)
 	c.Submitted = parseTimePtr(submitted)
@@ -353,61 +472,123 @@ func (d *DB) GetChange(number int64) (*Change, error) {
 }
 
 func (d *DB) GetChangeByChangeID(project, branch, changeID string) (*Change, error) {
-	c := &Change{}
-	var created, updated string
-	var submitted sql.NullString
-	err := d.db.QueryRow(`
-		SELECT ch.number, ch.project, ch.branch, ch.change_id, ch.subject, ch.owner_id, ch.status,
-		       ch.current_ps, ch.created, ch.updated, ch.submitted,
-		       a.full_name, a.email, a.username
+	row := d.db.QueryRow(`
+		SELECT `+changeCols+`
 		FROM changes ch JOIN accounts a ON a.id = ch.owner_id
-		WHERE ch.project=? AND ch.branch=? AND ch.change_id=?`, project, branch, changeID).
-		Scan(&c.Number, &c.Project, &c.Branch, &c.ChangeID, &c.Subject, &c.OwnerID, &c.Status,
-			&c.CurrentPS, &created, &updated, &submitted,
-			&c.OwnerName, &c.OwnerEmail, &c.OwnerUser)
-	if err != nil {
-		return nil, err
-	}
-	c.Created = parseTime(created)
-	c.Updated = parseTime(updated)
-	c.Submitted = parseTimePtr(submitted)
-	return c, nil
+		WHERE ch.project=? AND ch.branch=? AND ch.change_id=?`, project, branch, changeID)
+	return scanChange(row.Scan)
 }
 
-func (d *DB) ListChanges(status string, limit int) ([]*Change, error) {
-	q := `
-		SELECT ch.number, ch.project, ch.branch, ch.change_id, ch.subject, ch.owner_id, ch.status,
-		       ch.current_ps, ch.created, ch.updated, ch.submitted,
-		       a.full_name, a.email, a.username
-		FROM changes ch JOIN accounts a ON a.id = ch.owner_id `
+// ChangeQuery is the parsed form of a Gerrit-style change search.
+type ChangeQuery struct {
+	Status       string
+	Project      string
+	Branch       string
+	Topic        string
+	OwnerID      int64
+	OwnerUser    string
+	ReviewerUser string
+	ChangeNumber int64
+	ChangeID     string
+	WIP          *bool
+	Text         string
+	HasVote      bool
+	Before       *time.Time
+	After        *time.Time
+	Limit        int
+	Offset       int
+}
+
+// SearchChanges returns changes matching q plus the total number of matches
+// (ignoring Limit/Offset) for pagination.
+func (d *DB) SearchChanges(q ChangeQuery) ([]*Change, int, error) {
+	where := []string{}
 	args := []any{}
-	if status != "" {
-		q += `WHERE ch.status=? `
-		args = append(args, status)
+	add := func(cond string, a ...any) {
+		where = append(where, cond)
+		args = append(args, a...)
 	}
-	q += `ORDER BY ch.updated DESC LIMIT ?`
-	args = append(args, limit)
-	rows, err := d.db.Query(q, args...)
+	if q.Status != "" {
+		add(`ch.status=?`, q.Status)
+	}
+	if q.Project != "" {
+		add(`ch.project=?`, q.Project)
+	}
+	if q.Branch != "" {
+		add(`ch.branch=?`, q.Branch)
+	}
+	if q.Topic != "" {
+		add(`ch.topic=?`, q.Topic)
+	}
+	if q.OwnerID > 0 {
+		add(`ch.owner_id=?`, q.OwnerID)
+	}
+	if q.OwnerUser != "" {
+		add(`(a.username=? OR a.full_name=?)`, q.OwnerUser, q.OwnerUser)
+	}
+	if q.ReviewerUser != "" {
+		add(`EXISTS (SELECT 1 FROM reviewers rv JOIN accounts ra ON ra.id=rv.account_id
+		            WHERE rv.change_number=ch.number AND (ra.username=? OR ra.full_name=?))`,
+			q.ReviewerUser, q.ReviewerUser)
+	}
+	if q.ChangeNumber > 0 {
+		add(`ch.number=?`, q.ChangeNumber)
+	}
+	if q.ChangeID != "" {
+		add(`ch.change_id=?`, q.ChangeID)
+	}
+	if q.WIP != nil {
+		add(`ch.work_in_progress=?`, b2i(*q.WIP))
+	}
+	if q.HasVote {
+		add(`EXISTS (SELECT 1 FROM votes v WHERE v.change_number=ch.number)`)
+	}
+	if q.Before != nil {
+		add(`ch.updated < ?`, q.Before.UTC().Format(time.RFC3339Nano))
+	}
+	if q.After != nil {
+		add(`ch.updated > ?`, q.After.UTC().Format(time.RFC3339Nano))
+	}
+	if q.Text != "" {
+		like := "%" + q.Text + "%"
+		add(`(ch.subject LIKE ? OR ch.project LIKE ? OR ch.change_id LIKE ? OR CAST(ch.number AS TEXT) LIKE ?)`,
+			like, like, like, like)
+	}
+
+	whereSQL := ""
+	if len(where) > 0 {
+		whereSQL = "WHERE " + strings.Join(where, " AND ") + " "
+	}
+	fromSQL := `FROM changes ch JOIN accounts a ON a.id = ch.owner_id `
+
+	var total int
+	if err := d.db.QueryRow(`SELECT COUNT(*) `+fromSQL+whereSQL, args...).Scan(&total); err != nil {
+		return nil, 0, err
+	}
+
+	limit := q.Limit
+	if limit <= 0 || limit > 500 {
+		limit = 200
+	}
+	offset := q.Offset
+	if offset < 0 {
+		offset = 0
+	}
+	rows, err := d.db.Query(`SELECT `+changeCols+` `+fromSQL+whereSQL+
+		`ORDER BY ch.updated DESC LIMIT ? OFFSET ?`, append(args, limit, offset)...)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	defer rows.Close()
 	var out []*Change
 	for rows.Next() {
-		c := &Change{}
-		var created, updated string
-		var submitted sql.NullString
-		if err := rows.Scan(&c.Number, &c.Project, &c.Branch, &c.ChangeID, &c.Subject, &c.OwnerID, &c.Status,
-			&c.CurrentPS, &created, &updated, &submitted,
-			&c.OwnerName, &c.OwnerEmail, &c.OwnerUser); err != nil {
-			return nil, err
+		c, err := scanChange(rows.Scan)
+		if err != nil {
+			return nil, 0, err
 		}
-		c.Created = parseTime(created)
-		c.Updated = parseTime(updated)
-		c.Submitted = parseTimePtr(submitted)
 		out = append(out, c)
 	}
-	return out, rows.Err()
+	return out, total, rows.Err()
 }
 
 func (d *DB) UpdateChangeStatus(number int64, status string, submitted *time.Time) error {
@@ -549,6 +730,101 @@ func (d *DB) ListComments(changeNumber int64) ([]*Comment, error) {
 		}
 		c.Created = parseTime(created)
 		out = append(out, c)
+	}
+	return out, rows.Err()
+}
+
+// ---------- change metadata (topic / WIP / private) ----------
+
+func (d *DB) SetTopic(number int64, topic string) error {
+	_, err := d.db.Exec(`UPDATE changes SET topic=?, updated=? WHERE number=?`, topic, now(), number)
+	return err
+}
+
+func (d *DB) SetWorkInProgress(number int64, wip bool) error {
+	_, err := d.db.Exec(`UPDATE changes SET work_in_progress=?, updated=? WHERE number=?`, b2i(wip), now(), number)
+	return err
+}
+
+func (d *DB) SetPrivate(number int64, priv bool) error {
+	_, err := d.db.Exec(`UPDATE changes SET private=?, updated=? WHERE number=?`, b2i(priv), now(), number)
+	return err
+}
+
+// ---------- change messages (unified timeline) ----------
+
+func (d *DB) AddChangeMessage(m *ChangeMessage) error {
+	res, err := d.db.Exec(
+		`INSERT INTO change_messages(change_number, patch_set, type, author_id, message, created) VALUES(?,?,?,?,?,?)`,
+		m.ChangeNum, m.PatchSet, m.Type, m.AuthorID, m.Message, now())
+	if err != nil {
+		return err
+	}
+	m.ID, _ = res.LastInsertId()
+	m.Created = parseTime(now())
+	return nil
+}
+
+func (d *DB) ListChangeMessages(changeNumber int64) ([]*ChangeMessage, error) {
+	rows, err := d.db.Query(`
+		SELECT m.id, m.change_number, m.patch_set, m.type, m.author_id, m.message, m.created,
+		       COALESCE(a.full_name, ''), COALESCE(a.username, '')
+		FROM change_messages m LEFT JOIN accounts a ON a.id = m.author_id
+		WHERE m.change_number=? ORDER BY m.id`, changeNumber)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []*ChangeMessage
+	for rows.Next() {
+		m := &ChangeMessage{}
+		var created string
+		if err := rows.Scan(&m.ID, &m.ChangeNum, &m.PatchSet, &m.Type, &m.AuthorID, &m.Message, &created,
+			&m.AuthorName, &m.AuthorUser); err != nil {
+			return nil, err
+		}
+		m.Created = parseTime(created)
+		out = append(out, m)
+	}
+	return out, rows.Err()
+}
+
+// ---------- reviewers ----------
+
+func (d *DB) AddReviewer(changeNumber, accountID int64) error {
+	_, err := d.db.Exec(
+		`INSERT INTO reviewers(change_number, account_id, added) VALUES(?,?,?)
+		 ON CONFLICT(change_number, account_id) DO NOTHING`,
+		changeNumber, accountID, now())
+	return err
+}
+
+func (d *DB) RemoveReviewer(changeNumber, accountID int64) error {
+	_, err := d.db.Exec(`DELETE FROM reviewers WHERE change_number=? AND account_id=?`, changeNumber, accountID)
+	return err
+}
+
+func (d *DB) ListReviewers(changeNumber int64) ([]*Reviewer, error) {
+	rows, err := d.db.Query(`
+		SELECT rv.change_number, rv.account_id, a.full_name, a.username, a.email, rv.added
+		FROM reviewers rv JOIN accounts a ON a.id = rv.account_id
+		WHERE rv.change_number=? ORDER BY rv.added`, changeNumber)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []*Reviewer
+	for rows.Next() {
+		r := &Reviewer{}
+		var added string
+		if err := rows.Scan(&r.ChangeNumber, &r.AccountID, &r.Name, &r.Username, &r.Email, &added); err != nil {
+			return nil, err
+		}
+		r.Added = parseTime(added)
+		if r.Name == "" {
+			r.Name = r.Username
+		}
+		out = append(out, r)
 	}
 	return out, rows.Err()
 }

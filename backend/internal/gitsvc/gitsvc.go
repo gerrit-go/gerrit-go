@@ -195,6 +195,9 @@ func (s *Service) upsertChange(repo *git.Repository, project, branch string, c *
 		if err := s.db.CreateChange(change); err != nil {
 			return err
 		}
+		if err := s.db.AddReviewer(change.Number, pusher.ID); err != nil {
+			return err
+		}
 	}
 
 	// Duplicate patch set (same commit already uploaded) is a no-op.
@@ -219,6 +222,10 @@ func (s *Service) upsertChange(repo *git.Repository, project, branch string, c *
 	if err := s.db.SetCurrentPatchSet(change.Number, num); err != nil {
 		return err
 	}
+	s.db.AddChangeMessage(&store.ChangeMessage{
+		ChangeNum: change.Number, PatchSet: num, Type: "patchset-uploaded",
+		AuthorID: pusher.ID, Message: fmt.Sprintf("Uploaded patch set %d.", num),
+	})
 
 	refName := fmt.Sprintf("refs/changes/%02d/%d/%d", change.Number%100, change.Number, num)
 	return repo.Storer.SetReference(plumbing.NewHashReference(plumbing.ReferenceName(refName), c.Hash))

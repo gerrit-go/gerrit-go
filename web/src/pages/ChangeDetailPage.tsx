@@ -5,16 +5,22 @@ import {
   Check,
   ChevronDown,
   Copy,
+  EyeOff,
   FilePlus2,
   FileText,
   FileX2,
   MessageSquarePlus,
   Send,
+  Tag,
+  Trash2,
+  UserPlus,
   X,
 } from "lucide-react";
 import {
   api,
+  type AccountInfo,
   type ChangeInfo,
+  type ChangeMessageInfo,
   type CommentInfo,
   type FileDiff,
 } from "@/lib/api";
@@ -22,6 +28,7 @@ import { useAuth } from "@/auth";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
 import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
@@ -49,6 +56,7 @@ export default function ChangeDetailPage() {
   const [change, setChange] = useState<ChangeInfo | null>(null);
   const [files, setFiles] = useState<FileDiff[] | null>(null);
   const [comments, setComments] = useState<CommentInfo[]>([]);
+  const [messages, setMessages] = useState<ChangeMessageInfo[]>([]);
   const [patchSet, setPatchSet] = useState<number | "current">("current");
   const [error, setError] = useState("");
   const [actionMsg, setActionMsg] = useState("");
@@ -56,9 +64,14 @@ export default function ChangeDetailPage() {
   const load = useCallback(async () => {
     if (!num) return;
     try {
-      const [detail, cmts] = await Promise.all([api.changeDetail(num), api.comments(num)]);
+      const [detail, cmts, msgs] = await Promise.all([
+        api.changeDetail(num),
+        api.comments(num),
+        api.messages(num),
+      ]);
       setChange(detail);
       setComments(cmts ?? []);
+      setMessages(msgs ?? []);
     } catch (err) {
       setError((err as Error).message);
     }
@@ -99,7 +112,6 @@ export default function ChangeDetailPage() {
 
   const revisions = Object.values(change.revisions ?? {}).sort((a, b) => a._number - b._number);
   const currentPS = revisions.find((r) => r.commit === change.current_revision)?._number ?? change.current_ps ?? 1;
-  const changeMessages = comments.filter((c) => !c.path);
 
   const runAction = async (fn: () => Promise<unknown>, okMsg: string) => {
     setActionMsg("");
@@ -129,6 +141,12 @@ export default function ChangeDetailPage() {
             <div className="flex flex-wrap items-center gap-2">
               <h1 className="text-xl font-semibold">{change.subject}</h1>
               <StatusBadge status={change.status} />
+              {change.work_in_progress && (
+                <Badge variant="muted" className="gap-1">
+                  <EyeOff className="size-3" /> WIP
+                </Badge>
+              )}
+              {change.private && <Badge variant="outline">Private</Badge>}
             </div>
             <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-muted-foreground">
               <span className="font-mono text-xs">#{change._number}</span>
@@ -139,6 +157,14 @@ export default function ChangeDetailPage() {
                 {change.project}
               </Link>
               <span className="font-mono text-xs">→ {change.branch}</span>
+              {change.topic && (
+                <Link
+                  to={`/?q=${encodeURIComponent("topic:" + change.topic)}`}
+                  className="inline-flex items-center gap-1 rounded bg-muted px-1.5 py-0.5 text-xs text-foreground hover:underline"
+                >
+                  <Tag className="size-3" /> {change.topic}
+                </Link>
+              )}
               <span>
                 owner <span className="text-foreground">{change.owner.name}</span>
               </span>
@@ -179,6 +205,30 @@ export default function ChangeDetailPage() {
                 <X className="size-4" />
                 Abandon
               </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() =>
+                  runAction(
+                    () =>
+                      change.work_in_progress
+                        ? api.clearWIP(change._number)
+                        : api.setWIP(change._number),
+                    change.work_in_progress ? "Marked ready for review" : "Marked work-in-progress",
+                  )
+                }
+              >
+                <EyeOff className="size-4" />
+                {change.work_in_progress ? "Mark ready" : "Mark WIP"}
+              </Button>
+              <TopicDialog
+                num={change._number}
+                topic={change.topic ?? ""}
+                onDone={async (msg) => {
+                  setActionMsg(msg);
+                  await load();
+                }}
+              />
             </>
           )}
           {user && change.status === "ABANDONED" && (
@@ -290,26 +340,45 @@ export default function ChangeDetailPage() {
             </CardContent>
           </Card>
 
-          {/* change messages */}
+          {/* unified change timeline */}
           <Card className="gap-0 py-0">
             <CardHeader className="border-b py-3">
-              <CardTitle className="text-sm">Change messages ({changeMessages.length})</CardTitle>
+              <CardTitle className="text-sm">Change messages ({messages.length})</CardTitle>
             </CardHeader>
             <CardContent className="p-0">
-              {changeMessages.length === 0 ? (
+              {messages.length === 0 ? (
                 <p className="p-6 text-center text-sm text-muted-foreground">No messages yet.</p>
               ) : (
                 <ul className="divide-y">
-                  {changeMessages.map((m) => (
-                    <li key={m.id} className="flex flex-col gap-1 px-4 py-3">
-                      <div className="flex items-center gap-2 text-sm">
-                        <span className="font-medium">{m.author.name}</span>
-                        <span className="text-xs text-muted-foreground">{timeAgo(m.updated)}</span>
-                        <Badge variant="muted" className="text-[10px]">PS {m.patch_set}</Badge>
-                      </div>
-                      <p className="whitespace-pre-wrap text-sm text-muted-foreground">{m.message}</p>
-                    </li>
-                  ))}
+                  {messages.map((m) => {
+                    const positive = m.type === "submitted" || m.type === "vote";
+                    const negative = m.type === "abandoned";
+                    return (
+                      <li
+                        key={m.id}
+                        className={cn(
+                          "flex flex-col gap-1 border-l-2 px-4 py-3",
+                          positive && "border-emerald-500",
+                          negative && "border-red-500",
+                          !positive && !negative && "border-transparent",
+                        )}
+                      >
+                        <div className="flex flex-wrap items-center gap-2 text-sm">
+                          <span className="font-medium">{m.author?.name ?? "System"}</span>
+                          <Badge variant="muted" className="text-[10px]">
+                            {messageTypeLabel(m.type)}
+                          </Badge>
+                          {m.patch_set > 0 && (
+                            <Badge variant="muted" className="text-[10px]">
+                              PS {m.patch_set}
+                            </Badge>
+                          )}
+                          <span className="text-xs text-muted-foreground">{timeAgo(m.date)}</span>
+                        </div>
+                        <p className="whitespace-pre-wrap text-sm text-muted-foreground">{m.message}</p>
+                      </li>
+                    );
+                  })}
                 </ul>
               )}
             </CardContent>
@@ -318,6 +387,12 @@ export default function ChangeDetailPage() {
 
         {/* sidebar */}
         <div className="flex flex-col gap-4">
+          <ReviewersCard
+            change={change}
+            canEdit={!!user && change.status === "NEW"}
+            ownerId={change.owner._account_id}
+            onDone={load}
+          />
           <Card className="gap-3 py-4">
             <CardHeader className="px-4 py-0">
               <CardTitle className="text-sm">Votes</CardTitle>
@@ -418,6 +493,203 @@ export default function ChangeDetailPage() {
         </div>
       </div>
     </div>
+  );
+}
+
+function messageTypeLabel(type: string): string {
+  switch (type) {
+    case "patchset-uploaded":
+      return "Patch set";
+    case "vote":
+      return "Vote";
+    case "comment":
+      return "Comment";
+    case "submitted":
+      return "Merged";
+    case "abandoned":
+      return "Abandoned";
+    case "restored":
+      return "Restored";
+    case "reviewer-added":
+      return "Reviewer +";
+    case "reviewer-removed":
+      return "Reviewer −";
+    case "topic":
+      return "Topic";
+    case "wip":
+      return "WIP";
+    default:
+      return type;
+  }
+}
+
+function ReviewersCard({
+  change,
+  canEdit,
+  ownerId,
+  onDone,
+}: {
+  change: ChangeInfo;
+  canEdit: boolean;
+  ownerId: number;
+  onDone: () => Promise<void>;
+}) {
+  const [value, setValue] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const reviewers: AccountInfo[] = change.reviewers ?? [];
+
+  const add = async () => {
+    if (!value.trim()) return;
+    setBusy(true);
+    setErr("");
+    try {
+      await api.addReviewer(change._number, value.trim());
+      setValue("");
+      await onDone();
+    } catch (e) {
+      setErr((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const remove = async (id: number) => {
+    setBusy(true);
+    setErr("");
+    try {
+      await api.removeReviewer(change._number, id);
+      await onDone();
+    } catch (e) {
+      setErr((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Card className="gap-3 py-4">
+      <CardHeader className="px-4 py-0">
+        <CardTitle className="text-sm">Reviewers</CardTitle>
+      </CardHeader>
+      <CardContent className="flex flex-col gap-2 px-4">
+        {reviewers.length === 0 ? (
+          <span className="text-sm text-muted-foreground">No reviewers</span>
+        ) : (
+          <ul className="flex flex-col gap-1">
+            {reviewers.map((rv) => (
+              <li key={rv._account_id} className="flex items-center gap-2 text-sm">
+                <span className="truncate">{rv.name}</span>
+                {rv._account_id === ownerId && (
+                  <Badge variant="muted" className="text-[10px]">
+                    owner
+                  </Badge>
+                )}
+                {canEdit && rv._account_id !== ownerId && (
+                  <button
+                    className="ml-auto text-muted-foreground hover:text-destructive"
+                    onClick={() => remove(rv._account_id)}
+                    title="Remove reviewer"
+                    disabled={busy}
+                  >
+                    <Trash2 className="size-3.5" />
+                  </button>
+                )}
+              </li>
+            ))}
+          </ul>
+        )}
+        {canEdit && (
+          <div className="flex gap-1.5">
+            <Input
+              value={value}
+              onChange={(e) => setValue(e.target.value)}
+              placeholder="username"
+              className="h-8 text-xs"
+              onKeyDown={(e) => {
+                if (e.key === "Enter") add();
+              }}
+            />
+            <Button size="sm" variant="outline" disabled={busy || !value.trim()} onClick={add}>
+              <UserPlus className="size-4" />
+            </Button>
+          </div>
+        )}
+        {err && <p className="text-xs text-destructive">{err}</p>}
+      </CardContent>
+    </Card>
+  );
+}
+
+function TopicDialog({
+  num,
+  topic,
+  onDone,
+}: {
+  num: number;
+  topic: string;
+  onDone: (msg: string) => Promise<void>;
+}) {
+  const [open, setOpen] = useState(false);
+  const [value, setValue] = useState(topic);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+
+  useEffect(() => {
+    if (open) setValue(topic);
+  }, [open, topic]);
+
+  const submit = async () => {
+    setBusy(true);
+    setErr("");
+    try {
+      const t = value.trim();
+      if (t) await api.setTopic(num, t);
+      else await api.deleteTopic(num);
+      setOpen(false);
+      await onDone(t ? `Topic set to ${t}` : "Topic cleared");
+    } catch (e) {
+      setErr((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={setOpen}>
+      <DialogTrigger asChild>
+        <Button size="sm" variant="outline">
+          <Tag className="size-4" />
+          Topic
+        </Button>
+      </DialogTrigger>
+      <DialogContent className="sm:max-w-sm">
+        <DialogHeader>
+          <DialogTitle>Set topic</DialogTitle>
+          <DialogDescription>
+            Group related changes under a topic. Leave empty to clear.
+          </DialogDescription>
+        </DialogHeader>
+        <Input
+          value={value}
+          onChange={(e) => setValue(e.target.value)}
+          placeholder="e.g. release-2.0"
+          autoFocus
+          onKeyDown={(e) => {
+            if (e.key === "Enter") submit();
+          }}
+        />
+        {err && <p className="text-sm text-destructive">{err}</p>}
+        <DialogFooter>
+          <Button variant="ghost" onClick={() => setOpen(false)}>
+            Cancel
+          </Button>
+          <Button onClick={submit} disabled={busy}>
+            {busy ? "Saving…" : "Save"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
 

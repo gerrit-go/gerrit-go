@@ -10,6 +10,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -70,10 +71,17 @@ func (s *Server) routes() {
 	mux.HandleFunc("GET /changes/{num}/revisions/{ps}/file", s.handleRevisionFileContent)
 	mux.HandleFunc("GET /changes/{num}/revisions/{ps}/patch", s.handleRevisionPatch)
 	mux.HandleFunc("GET /changes/{num}/comments", s.handleListComments)
+	mux.HandleFunc("GET /changes/{num}/messages", s.handleListMessages)
 	mux.HandleFunc("POST /changes/{num}/review", s.requireAuth(s.handleReview))
 	mux.HandleFunc("POST /changes/{num}/submit", s.requireAuth(s.handleSubmit))
 	mux.HandleFunc("POST /changes/{num}/abandon", s.requireAuth(s.handleAbandon))
 	mux.HandleFunc("POST /changes/{num}/restore", s.requireAuth(s.handleRestore))
+	mux.HandleFunc("POST /changes/{num}/reviewers", s.requireAuth(s.handleAddReviewer))
+	mux.HandleFunc("DELETE /changes/{num}/reviewers/{id}", s.requireAuth(s.handleDeleteReviewer))
+	mux.HandleFunc("PUT /changes/{num}/topic", s.requireAuth(s.handleSetTopic))
+	mux.HandleFunc("DELETE /changes/{num}/topic", s.requireAuth(s.handleDeleteTopic))
+	mux.HandleFunc("PUT /changes/{num}/wip", s.requireAuth(s.handleSetWIP))
+	mux.HandleFunc("DELETE /changes/{num}/wip", s.requireAuth(s.handleClearWIP))
 
 	// Gerrit-compatible authenticated alias prefix: /a/...
 	mux.Handle("/a/", http.StripPrefix("/a", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -450,7 +458,7 @@ func (s *Server) handleFileContent(w http.ResponseWriter, r *http.Request) {
 // ---------- changes ----------
 
 func changeInfo(c *store.Change) map[string]any {
-	return map[string]any{
+	info := map[string]any{
 		"id":        fmt.Sprintf("%s~%s~%s", c.Project, c.Branch, c.ChangeID),
 		"_number":   c.Number,
 		"project":   c.Project,
@@ -464,9 +472,15 @@ func changeInfo(c *store.Change) map[string]any {
 			"username":    c.OwnerUser,
 			"email":       c.OwnerEmail,
 		},
-		"created":  c.Created.Format(time.RFC3339),
-		"updated":  c.Updated.Format(time.RFC3339),
+		"created":          c.Created.Format(time.RFC3339),
+		"updated":          c.Updated.Format(time.RFC3339),
+		"work_in_progress": c.WorkInProgress,
+		"private":          c.Private,
 	}
+	if c.Topic != "" {
+		info["topic"] = c.Topic
+	}
+	return info
 }
 
 func (s *Server) parseChangeNum(r *http.Request) (int64, bool) {
@@ -486,49 +500,141 @@ func (s *Server) parsePS(r *http.Request, current int) int {
 	return n
 }
 
-func (s *Server) handleListChanges(w http.ResponseWriter, r *http.Request) {
-	q := r.URL.Query().Get("q")
-	status := ""
-	text := ""
-	for _, part := range strings.Fields(q) {
-		switch {
-		case strings.HasPrefix(part, "status:"):
-			switch strings.ToLower(strings.TrimPrefix(part, "status:")) {
-			case "open":
-				status = "NEW"
-			case "merged":
-				status = "MERGED"
-			case "abandoned":
-				status = "ABANDONED"
-			}
-		case strings.HasPrefix(part, "project:"):
-			text = strings.TrimPrefix(part, "project:")
-		default:
-			text = part
+func parseDate(s string) *time.Time {
+	for _, layout := range []string{time.RFC3339, "2006-01-02T15:04:05", "2006-01-02"} {
+		if t, err := time.Parse(layout, s); err == nil {
+			return &t
 		}
 	}
-	changes, err := s.db.ListChanges(status, 200)
+	return nil
+}
+
+// parseChangeQuery turns a Gerrit-style query string into a store.ChangeQuery.
+// selfName, when non-empty, resolves owner:self / reviewer:self.
+func parseChangeQuery(q, selfName string) store.ChangeQuery {
+	cq := store.ChangeQuery{}
+	for _, part := range strings.Fields(q) {
+		key, val, hasColon := strings.Cut(part, ":")
+		if !hasColon {
+			cq.Text = part
+			continue
+		}
+		val = strings.Trim(val, "\"")
+		resolve := func(v string) string {
+			if strings.EqualFold(v, "self") && selfName != "" {
+				return selfName
+			}
+			return v
+		}
+		switch strings.ToLower(key) {
+		case "status":
+			switch strings.ToLower(val) {
+			case "open", "new", "pending":
+				cq.Status = "NEW"
+			case "merged", "closed":
+				cq.Status = "MERGED"
+			case "abandoned":
+				cq.Status = "ABANDONED"
+			}
+		case "project":
+			cq.Project = val
+		case "branch":
+			cq.Branch = val
+		case "topic":
+			cq.Topic = val
+		case "owner":
+			cq.OwnerUser = resolve(val)
+		case "reviewer":
+			cq.ReviewerUser = resolve(val)
+		case "change":
+			if n, err := strconv.ParseInt(val, 10, 64); err == nil {
+				cq.ChangeNumber = n
+			} else {
+				cq.ChangeID = val
+			}
+		case "is":
+			switch strings.ToLower(val) {
+			case "wip":
+				t := true
+				cq.WIP = &t
+			case "open":
+				cq.Status = "NEW"
+			case "merged":
+				cq.Status = "MERGED"
+			case "abandoned":
+				cq.Status = "ABANDONED"
+			}
+		case "has":
+			if strings.EqualFold(val, "vote") {
+				cq.HasVote = true
+			}
+		case "before", "until":
+			cq.Before = parseDate(val)
+		case "after", "since":
+			cq.After = parseDate(val)
+		default:
+			// Unknown operator: treat the whole token as free text.
+			if cq.Text == "" {
+				cq.Text = part
+			}
+		}
+	}
+	return cq
+}
+
+func (s *Server) handleListChanges(w http.ResponseWriter, r *http.Request) {
+	selfName := ""
+	if acct := accountFrom(r.Context()); acct != nil {
+		selfName = acct.Username
+	} else if acct, err := s.auth.CurrentAccount(r); err == nil {
+		selfName = acct.Username
+	}
+	cq := parseChangeQuery(r.URL.Query().Get("q"), selfName)
+	if n, err := strconv.Atoi(r.URL.Query().Get("n")); err == nil && n > 0 {
+		cq.Limit = n
+	}
+	if start, err := strconv.Atoi(r.URL.Query().Get("start")); err == nil && start > 0 {
+		cq.Offset = start
+	} else if sStart, err := strconv.Atoi(r.URL.Query().Get("S")); err == nil && sStart > 0 {
+		cq.Offset = sStart
+	}
+
+	changes, total, err := s.db.SearchChanges(cq)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	w.Header().Set("X-Total-Count", strconv.Itoa(total))
 	out := make([]map[string]any, 0, len(changes))
 	for _, c := range changes {
-		if text != "" &&
-			!strings.Contains(c.Project, text) &&
-			!strings.Contains(c.Subject, text) &&
-			!strings.Contains(strconv.FormatInt(c.Number, 10), text) {
-			continue
-		}
 		info := changeInfo(c)
 		if ps, err := s.db.GetPatchSet(c.Number, c.CurrentPS); err == nil {
 			info["current_revision"] = ps.CommitSHA
 		}
 		info["current_ps"] = c.CurrentPS
 		info["labels"] = s.labelsFor(c.Number)
+		info["reviewers"] = s.reviewersFor(c.Number)
 		out = append(out, info)
 	}
 	writeJSON(w, http.StatusOK, out)
+}
+
+// reviewersFor returns the reviewer list for a change as Gerrit ReviewerInfo maps.
+func (s *Server) reviewersFor(changeNum int64) []map[string]any {
+	reviewers, err := s.db.ListReviewers(changeNum)
+	if err != nil {
+		return []map[string]any{}
+	}
+	out := make([]map[string]any, 0, len(reviewers))
+	for _, rv := range reviewers {
+		out = append(out, map[string]any{
+			"_account_id": rv.AccountID,
+			"name":        rv.Name,
+			"username":    rv.Username,
+			"email":       rv.Email,
+		})
+	}
+	return out
 }
 
 func (s *Server) labelsFor(changeNum int64) map[string]map[string]any {
@@ -591,6 +697,7 @@ func (s *Server) handleChangeDetail(w http.ResponseWriter, r *http.Request) {
 	}
 
 	info["labels"] = s.labelsFor(c.Number)
+	info["reviewers"] = s.reviewersFor(c.Number)
 
 	// Submittable hint: has Code-Review +2 and status NEW.
 	submittable := c.Status == "NEW"
@@ -713,13 +820,13 @@ func (s *Server) handleListComments(w http.ResponseWriter, r *http.Request) {
 	out := make([]map[string]any, 0, len(comments))
 	for _, c := range comments {
 		out = append(out, map[string]any{
-			"id":        c.ID,
-			"patch_set": c.PatchSet,
-			"path":      c.File,
-			"line":      c.Line,
-			"message":   c.Message,
+			"id":          c.ID,
+			"patch_set":   c.PatchSet,
+			"path":        c.File,
+			"line":        c.Line,
+			"message":     c.Message,
 			"in_reply_to": c.InReplyTo,
-			"updated":   c.Created.Format(time.RFC3339),
+			"updated":     c.Created.Format(time.RFC3339),
 			"author": map[string]any{
 				"_account_id": c.AuthorID,
 				"name":        orDefault(c.AuthorName, c.AuthorUser),
@@ -757,6 +864,10 @@ func (s *Server) handleReview(w http.ResponseWriter, r *http.Request) {
 	}
 
 	allowed := map[string][2]int{"Code-Review": {-2, 2}, "Verified": {-1, 1}}
+	// Anyone who reviews becomes a reviewer (Gerrit behaviour).
+	s.db.AddReviewer(c.Number, acct.ID)
+
+	voteTokens := []string{}
 	for label, value := range req.Labels {
 		bounds, ok := allowed[label]
 		if !ok {
@@ -773,12 +884,21 @@ func (s *Server) handleReview(w http.ResponseWriter, r *http.Request) {
 				writeErr(w, http.StatusInternalServerError, err.Error())
 				return
 			}
+			voteTokens = append(voteTokens, fmt.Sprintf("%s 0", label))
 			continue
 		}
 		if err := s.db.SetVote(v); err != nil {
 			writeErr(w, http.StatusInternalServerError, err.Error())
 			return
 		}
+		voteTokens = append(voteTokens, fmt.Sprintf("%s%+d", label, value))
+	}
+	if len(voteTokens) > 0 {
+		sort.Strings(voteTokens)
+		s.db.AddChangeMessage(&store.ChangeMessage{
+			ChangeNum: c.Number, PatchSet: c.CurrentPS, Type: "vote",
+			AuthorID: acct.ID, Message: strings.Join(voteTokens, ", "),
+		})
 	}
 
 	for file, list := range req.Comments {
@@ -794,9 +914,9 @@ func (s *Server) handleReview(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if strings.TrimSpace(req.Message) != "" {
-		s.db.CreateComment(&store.Comment{
-			ChangeNum: c.Number, PatchSet: c.CurrentPS, File: "",
-			Line: 0, Message: req.Message, AuthorID: acct.ID,
+		s.db.AddChangeMessage(&store.ChangeMessage{
+			ChangeNum: c.Number, PatchSet: c.CurrentPS, Type: "comment",
+			AuthorID: acct.ID, Message: strings.TrimSpace(req.Message),
 		})
 	}
 
@@ -805,6 +925,7 @@ func (s *Server) handleReview(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleSubmit(w http.ResponseWriter, r *http.Request) {
+	acct := s.account(r)
 	num, ok := s.parseChangeNum(r)
 	if !ok {
 		writeErr(w, http.StatusBadRequest, "invalid change number")
@@ -834,6 +955,10 @@ func (s *Server) handleSubmit(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusConflict, err.Error())
 		return
 	}
+	s.db.AddChangeMessage(&store.ChangeMessage{
+		ChangeNum: c.Number, PatchSet: c.CurrentPS, Type: "submitted",
+		AuthorID: acct.ID, Message: "Change merged (fast-forward).",
+	})
 	writeJSON(w, http.StatusOK, map[string]any{"status": "MERGED"})
 }
 
@@ -846,6 +971,7 @@ func (s *Server) handleRestore(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) setChangeStatus(w http.ResponseWriter, r *http.Request, to, requireFrom string) {
+	acct := s.account(r)
 	num, ok := s.parseChangeNum(r)
 	if !ok {
 		writeErr(w, http.StatusBadRequest, "invalid change number")
@@ -864,8 +990,224 @@ func (s *Server) setChangeStatus(w http.ResponseWriter, r *http.Request, to, req
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	msgType, msgText := "restored", "Change restored."
+	if to == "ABANDONED" {
+		msgType, msgText = "abandoned", "Change abandoned."
+	}
+	s.db.AddChangeMessage(&store.ChangeMessage{
+		ChangeNum: c.Number, PatchSet: c.CurrentPS, Type: msgType,
+		AuthorID: acct.ID, Message: msgText,
+	})
 	writeJSON(w, http.StatusOK, map[string]any{"status": to})
 }
+
+// ---------- change messages, reviewers, topic, WIP ----------
+
+func (s *Server) handleListMessages(w http.ResponseWriter, r *http.Request) {
+	num, ok := s.parseChangeNum(r)
+	if !ok {
+		writeErr(w, http.StatusBadRequest, "invalid change number")
+		return
+	}
+	if _, err := s.db.GetChange(num); err != nil {
+		writeErr(w, http.StatusNotFound, "change not found")
+		return
+	}
+	msgs, err := s.db.ListChangeMessages(num)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	out := make([]map[string]any, 0, len(msgs))
+	for _, m := range msgs {
+		entry := map[string]any{
+			"id":        m.ID,
+			"type":      m.Type,
+			"patch_set": m.PatchSet,
+			"message":   m.Message,
+			"date":      m.Created.Format(time.RFC3339),
+		}
+		if m.AuthorID > 0 {
+			entry["author"] = map[string]any{
+				"_account_id": m.AuthorID,
+				"name":        orDefault(m.AuthorName, m.AuthorUser),
+				"username":    m.AuthorUser,
+			}
+		}
+		out = append(out, entry)
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+// resolveAccount finds an account by numeric id or by username.
+func (s *Server) resolveAccount(ident string) (*store.Account, error) {
+	ident = strings.TrimSpace(ident)
+	if ident == "" {
+		return nil, errors.New("empty account identifier")
+	}
+	if id, err := strconv.ParseInt(ident, 10, 64); err == nil {
+		return s.db.GetAccount(id)
+	}
+	return s.db.GetAccountByUsername(ident)
+}
+
+func (s *Server) handleAddReviewer(w http.ResponseWriter, r *http.Request) {
+	acct := s.account(r)
+	num, ok := s.parseChangeNum(r)
+	if !ok {
+		writeErr(w, http.StatusBadRequest, "invalid change number")
+		return
+	}
+	c, err := s.db.GetChange(num)
+	if err != nil {
+		writeErr(w, http.StatusNotFound, "change not found")
+		return
+	}
+	var req struct {
+		Reviewer string `json:"reviewer"`
+	}
+	if err := decodeJSON(r, &req); err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	target, err := s.resolveAccount(req.Reviewer)
+	if err != nil {
+		writeErr(w, http.StatusNotFound, "reviewer not found")
+		return
+	}
+	if err := s.db.AddReviewer(c.Number, target.ID); err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	s.db.AddChangeMessage(&store.ChangeMessage{
+		ChangeNum: c.Number, Type: "reviewer-added", AuthorID: acct.ID,
+		Message: fmt.Sprintf("Added reviewer %s.", orDefault(target.FullName, target.Username)),
+	})
+	s.db.TouchChange(c.Number)
+	writeJSON(w, http.StatusOK, s.reviewersFor(c.Number))
+}
+
+func (s *Server) handleDeleteReviewer(w http.ResponseWriter, r *http.Request) {
+	acct := s.account(r)
+	num, ok := s.parseChangeNum(r)
+	if !ok {
+		writeErr(w, http.StatusBadRequest, "invalid change number")
+		return
+	}
+	c, err := s.db.GetChange(num)
+	if err != nil {
+		writeErr(w, http.StatusNotFound, "change not found")
+		return
+	}
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil || id <= 0 {
+		writeErr(w, http.StatusBadRequest, "invalid reviewer id")
+		return
+	}
+	if id == c.OwnerID {
+		writeErr(w, http.StatusBadRequest, "cannot remove the change owner from reviewers")
+		return
+	}
+	if err := s.db.RemoveReviewer(c.Number, id); err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	name := strconv.FormatInt(id, 10)
+	if a, err := s.db.GetAccount(id); err == nil {
+		name = orDefault(a.FullName, a.Username)
+	}
+	s.db.AddChangeMessage(&store.ChangeMessage{
+		ChangeNum: c.Number, Type: "reviewer-removed", AuthorID: acct.ID,
+		Message: fmt.Sprintf("Removed reviewer %s.", name),
+	})
+	s.db.TouchChange(c.Number)
+	writeJSON(w, http.StatusOK, s.reviewersFor(c.Number))
+}
+
+func (s *Server) handleSetTopic(w http.ResponseWriter, r *http.Request) {
+	acct := s.account(r)
+	num, ok := s.parseChangeNum(r)
+	if !ok {
+		writeErr(w, http.StatusBadRequest, "invalid change number")
+		return
+	}
+	c, err := s.db.GetChange(num)
+	if err != nil {
+		writeErr(w, http.StatusNotFound, "change not found")
+		return
+	}
+	var req struct {
+		Topic string `json:"topic"`
+	}
+	if err := decodeJSON(r, &req); err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	topic := strings.TrimSpace(req.Topic)
+	if err := s.db.SetTopic(c.Number, topic); err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	msg := "Topic cleared."
+	if topic != "" {
+		msg = fmt.Sprintf("Topic set to %s.", topic)
+	}
+	s.db.AddChangeMessage(&store.ChangeMessage{
+		ChangeNum: c.Number, Type: "topic", AuthorID: acct.ID, Message: msg,
+	})
+	writeJSON(w, http.StatusOK, map[string]any{"topic": topic})
+}
+
+func (s *Server) handleDeleteTopic(w http.ResponseWriter, r *http.Request) {
+	acct := s.account(r)
+	num, ok := s.parseChangeNum(r)
+	if !ok {
+		writeErr(w, http.StatusBadRequest, "invalid change number")
+		return
+	}
+	c, err := s.db.GetChange(num)
+	if err != nil {
+		writeErr(w, http.StatusNotFound, "change not found")
+		return
+	}
+	if err := s.db.SetTopic(c.Number, ""); err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	s.db.AddChangeMessage(&store.ChangeMessage{
+		ChangeNum: c.Number, Type: "topic", AuthorID: acct.ID, Message: "Topic cleared.",
+	})
+	writeJSON(w, http.StatusOK, nil)
+}
+
+func (s *Server) setWIP(w http.ResponseWriter, r *http.Request, wip bool) {
+	acct := s.account(r)
+	num, ok := s.parseChangeNum(r)
+	if !ok {
+		writeErr(w, http.StatusBadRequest, "invalid change number")
+		return
+	}
+	c, err := s.db.GetChange(num)
+	if err != nil {
+		writeErr(w, http.StatusNotFound, "change not found")
+		return
+	}
+	if err := s.db.SetWorkInProgress(c.Number, wip); err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	msg := "Change marked ready for review."
+	if wip {
+		msg = "Change marked work-in-progress."
+	}
+	s.db.AddChangeMessage(&store.ChangeMessage{
+		ChangeNum: c.Number, Type: "wip", AuthorID: acct.ID, Message: msg,
+	})
+	writeJSON(w, http.StatusOK, map[string]any{"work_in_progress": wip})
+}
+
+func (s *Server) handleSetWIP(w http.ResponseWriter, r *http.Request)   { s.setWIP(w, r, true) }
+func (s *Server) handleClearWIP(w http.ResponseWriter, r *http.Request) { s.setWIP(w, r, false) }
 
 // ---------- static frontend ----------
 

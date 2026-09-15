@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { api, type ChangeInfo, type LabelInfo } from "@/lib/api";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Skeleton } from "@/components/ui/skeleton";
 import { timeAgo } from "@/lib/utils";
@@ -60,10 +61,14 @@ const TAB_QUERY: Record<string, string> = {
   all: "",
 };
 
+const PAGE_SIZE = 25;
+
 export default function ChangesPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const q = searchParams.get("q") ?? "";
+  const start = Number(searchParams.get("start") ?? "0") || 0;
   const [changes, setChanges] = useState<ChangeInfo[] | null>(null);
+  const [total, setTotal] = useState(0);
   const [error, setError] = useState("");
 
   const statusFilter = useMemo(() => {
@@ -75,15 +80,25 @@ export default function ChangesPage() {
   const load = () => {
     setChanges(null);
     api
-      .listChanges(q)
-      .then((data) => setChanges(data ?? []))
+      .listChangesPaged(q, PAGE_SIZE, start)
+      .then(({ items, total }) => {
+        setChanges(items ?? []);
+        setTotal(total);
+      })
       .catch((err) => {
         setError((err as Error).message);
         setChanges([]);
       });
   };
 
-  useEffect(load, [q]);
+  useEffect(load, [q, start]);
+
+  const gotoStart = (next: number) => {
+    const params = new URLSearchParams(searchParams);
+    if (next > 0) params.set("start", String(next));
+    else params.delete("start");
+    setSearchParams(params);
+  };
 
   const setTab = (tab: string) => {
     const next = new URLSearchParams();
@@ -156,10 +171,18 @@ export default function ChangesPage() {
               {changes.map((c) => (
                 <TableRow key={c._number} className="cursor-pointer" onClick={() => (window.location.href = `/c/${c._number}`)}>
                   <TableCell className="font-mono text-xs text-muted-foreground">{c._number}</TableCell>
-                  <TableCell className="max-w-md truncate font-medium">
-                    <Link to={`/c/${c._number}`} className="hover:underline" onClick={(e) => e.stopPropagation()}>
-                      {c.subject}
-                    </Link>
+                  <TableCell className="max-w-md font-medium">
+                    <div className="flex items-center gap-2">
+                      <Link to={`/c/${c._number}`} className="truncate hover:underline" onClick={(e) => e.stopPropagation()}>
+                        {c.subject}
+                      </Link>
+                      {c.work_in_progress && (
+                        <Badge variant="muted" className="shrink-0 text-[10px]">WIP</Badge>
+                      )}
+                      {c.topic && (
+                        <Badge variant="outline" className="shrink-0 text-[10px]">#{c.topic}</Badge>
+                      )}
+                    </div>
                   </TableCell>
                   <TableCell className="text-sm">
                     <Link
@@ -182,6 +205,32 @@ export default function ChangesPage() {
           </Table>
         </div>
       )}
+
+      {changes !== null && total > PAGE_SIZE && (
+        <div className="flex items-center justify-between text-sm text-muted-foreground">
+          <span>
+            {start + 1}–{Math.min(start + PAGE_SIZE, total)} of {total}
+          </span>
+          <div className="flex gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={start === 0}
+              onClick={() => gotoStart(start - PAGE_SIZE)}
+            >
+              Prev
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={start + PAGE_SIZE >= total}
+              onClick={() => gotoStart(start + PAGE_SIZE)}
+            >
+              Next
+            </Button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -191,7 +240,7 @@ function SearchBar({ defaultValue }: { defaultValue: string }) {
     <input
       name="q"
       defaultValue={defaultValue}
-      placeholder="Filter: free text, project:foo…"
+      placeholder="Filter: owner:self reviewer:alice project:foo branch:main topic:rel is:wip has:vote change:42 …"
       className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-xs transition-[color,box-shadow] outline-none placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
     />
   );
