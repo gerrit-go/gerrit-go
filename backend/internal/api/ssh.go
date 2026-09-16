@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 
+	"gerrit-go/internal/notify"
 	"gerrit-go/internal/store"
 
 	"golang.org/x/crypto/ssh"
@@ -27,6 +28,7 @@ func (s *Server) StartSSH(addr string) error {
 	if addr == "" {
 		return nil
 	}
+	s.sshAddr = addr
 	config := &ssh.ServerConfig{
 		PublicKeyCallback: func(conn ssh.ConnMetadata, key ssh.PublicKey) (*ssh.Permissions, error) {
 			return s.sshAuth(conn, key)
@@ -241,6 +243,30 @@ func (s *Server) sshGerrit(ch ssh.Channel, acct *store.Account, args []string) i
 		return s.sshGerritReview(ch, acct, args[1:])
 	case "submit":
 		return s.sshGerritSubmit(ch, acct, args[1:])
+	case "stream-events":
+		return s.sshGerritStreamEvents(ch, acct, args[1:])
+	case "ls-projects":
+		return s.sshLsProjects(ch, acct)
+	case "ls-groups":
+		return s.sshLsGroups(ch, acct)
+	case "ls-members":
+		return s.sshLsMembers(ch, acct, args[1:])
+	case "set-reviewers":
+		return s.sshSetReviewers(ch, acct, args[1:])
+	case "create-project":
+		return s.sshCreateProject(ch, acct, args[1:])
+	case "create-branch":
+		return s.sshCreateBranch(ch, acct, args[1:])
+	case "create-tag":
+		return s.sshCreateTag(ch, acct, args[1:])
+	case "delete-project":
+		return s.sshDeleteProject(ch, acct, args[1:])
+	case "delete-branch":
+		return s.sshDeleteBranch(ch, acct, args[1:])
+	case "delete-tag":
+		return s.sshDeleteTag(ch, acct, args[1:])
+	case "set-project":
+		return s.sshSetProject(ch, acct, args[1:])
 	default:
 		fmt.Fprintf(ch.Stderr(), "gerrit: unknown subcommand %q\n", args[0])
 		return 1
@@ -414,6 +440,16 @@ func (s *Server) sshGerritReview(ch ssh.Channel, acct *store.Account, args []str
 		})
 	}
 	s.db.TouchChange(c.Number)
+	evType := "review"
+	if len(labels) == 0 {
+		evType = "comment"
+	}
+	s.notifyChange(c, acct.ID, notify.Event{
+		Type:             evType,
+		Message:          strings.TrimSpace(message),
+		NotifyOwner:      true,
+		IncludeReviewers: true,
+	})
 	fmt.Fprintf(ch, "reviewed change %d\n", c.Number)
 	return 0
 }

@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"gerrit-go/internal/auth"
+	"gerrit-go/internal/events"
 	"gerrit-go/internal/gitsvc"
 	"gerrit-go/internal/i18n"
 	"gerrit-go/internal/metrics"
@@ -35,6 +36,8 @@ type Server struct {
 	mux           *http.ServeMux
 	allowRegister bool
 	limiter       *loginLimiter
+	sshAddr       string
+	events        *events.Broker
 }
 
 func NewRouter(db *store.DB, authSvc *auth.Service, gitSvc *gitsvc.Service, notifier *notify.Notifier, staticDir string, allowRegister bool) http.Handler {
@@ -59,7 +62,9 @@ func NewServer(db *store.DB, authSvc *auth.Service, gitSvc *gitsvc.Service, noti
 		mux:           http.NewServeMux(),
 		allowRegister: allowRegister,
 		limiter:       newLoginLimiter(5, 10*time.Minute, 15*time.Minute),
+		events:        events.NewBroker(),
 	}
+	gitSvc.OnChangeEvent = s.onGitChangeEvent
 	s.routes()
 	return s
 }
@@ -114,6 +119,8 @@ func (s *Server) routes() {
 	mux.HandleFunc("GET /projects/{name}/commits", s.handleListCommits)
 	mux.HandleFunc("GET /projects/{name}/tree", s.handleListTree)
 	mux.HandleFunc("GET /projects/{name}/file", s.handleFileContent)
+	mux.HandleFunc("GET /projects/{name}/blame", s.handleBlame)
+	mux.HandleFunc("GET /projects/{name}/file-log", s.handleFileLog)
 	mux.HandleFunc("GET /projects/{name}/access", s.handleGetAccess)
 	mux.HandleFunc("PUT /projects/{name}/access", s.requireAuth(s.handleSetAccess))
 	mux.HandleFunc("PUT /projects/{name}/config", s.requireAuth(s.handleSetProjectConfig))
@@ -167,6 +174,7 @@ func (s *Server) routes() {
 	mux.HandleFunc("POST /changes/{num}/restore", s.requireAuth(s.handleRestore))
 	mux.HandleFunc("POST /changes/{num}/reviewers", s.requireAuth(s.handleAddReviewer))
 	mux.HandleFunc("DELETE /changes/{num}/reviewers/{id}", s.requireAuth(s.handleDeleteReviewer))
+	mux.HandleFunc("GET /changes/{num}/suggest-reviewers", s.requireAuth(s.handleSuggestReviewers))
 	mux.HandleFunc("PUT /changes/{num}/topic", s.requireAuth(s.handleSetTopic))
 	mux.HandleFunc("DELETE /changes/{num}/topic", s.requireAuth(s.handleDeleteTopic))
 	mux.HandleFunc("PUT /changes/{num}/wip", s.requireAuth(s.handleSetWIP))
@@ -1857,6 +1865,39 @@ func (s *Server) handleAddReviewer(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, s.reviewersFor(c.Number))
 }
 
+// handleSuggestReviewers returns accounts suggested as reviewers for a change,
+// ranked by their activity on the project's other changes. The change owner and
+// its current reviewers are excluded.
+func (s *Server) handleSuggestReviewers(w http.ResponseWriter, r *http.Request) {
+	num, ok := s.parseChangeNum(r)
+	if !ok {
+		writeErr(w, http.StatusBadRequest, "invalid change number")
+		return
+	}
+	c, err := s.db.GetChange(num)
+	if err != nil {
+		writeErr(w, http.StatusNotFound, "change not found")
+		return
+	}
+	if !s.ensureChangeRead(w, r, c) {
+		return
+	}
+	exclude := []int64{c.OwnerID}
+	for _, rv := range s.reviewersOf(c.Number) {
+		exclude = append(exclude, rv.AccountID)
+	}
+	suggested, err := s.db.SuggestReviewers(c.Project, c.Number, exclude, 5)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	out := make([]map[string]any, 0, len(suggested))
+	for _, a := range suggested {
+		out = append(out, accountInfo(a))
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
 func (s *Server) handleDeleteReviewer(w http.ResponseWriter, r *http.Request) {
 	acct := s.account(r)
 	lang := i18n.LangFrom(r.Context())
@@ -1941,6 +1982,7 @@ func (s *Server) handleSetTopic(w http.ResponseWriter, r *http.Request) {
 	s.db.AddChangeMessage(&store.ChangeMessage{
 		ChangeNum: c.Number, Type: "topic", AuthorID: acct.ID, Message: msg,
 	})
+	s.publishStreamEvent(c.Number, "topic-changed", acct, map[string]any{"topic": topic})
 	writeJSON(w, http.StatusOK, map[string]any{"topic": topic})
 }
 
@@ -2005,6 +2047,7 @@ func (s *Server) setWIP(w http.ResponseWriter, r *http.Request, wip bool) {
 	s.db.AddChangeMessage(&store.ChangeMessage{
 		ChangeNum: c.Number, Type: "wip", AuthorID: acct.ID, Message: msg,
 	})
+	s.publishStreamEvent(c.Number, "wip-state-changed", acct, map[string]any{"wip": wip})
 	writeJSON(w, http.StatusOK, map[string]any{"work_in_progress": wip})
 }
 

@@ -38,6 +38,10 @@ export default {
     editOpen: "An edit is open on this change",
   },
   ps: "PS {{ps}}",
+  download: {
+    title: "Download",
+    desc: "Fetch this patch set with one of these commands.",
+  },
   files: {
     title: "Files",
     draftsBadge_one: "{{count}} draft",
@@ -70,6 +74,7 @@ export default {
     title: "Reviewers",
     empty: "No reviewers",
     remove: "Remove reviewer",
+    suggested: "Suggested:",
   },
   assignee: {
     title: "Assignee",
@@ -153,6 +158,9 @@ export default {
     resolve: "Resolve",
     unresolve: "Unresolve",
     reply: "Reply",
+    applySuggestion: "Apply suggestion",
+    applyingSuggestion: "Applying…",
+    suggestionApplied: "Suggestion applied to the open edit",
   },
   drafts: {
     badge: "Draft",

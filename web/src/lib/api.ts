@@ -122,6 +122,24 @@ export interface EditInfo {
   stale: boolean;
 }
 
+export interface BlameLine {
+  line: number;
+  sha: string;
+  author: string;
+  email: string;
+  when: number;
+  summary: string;
+  text: string;
+}
+
+export interface FileLogEntry {
+  sha: string;
+  author: string;
+  email: string;
+  when: number;
+  subject: string;
+}
+
 export interface CommentInfo {
   id: number;
   patch_set: number;
@@ -343,6 +361,14 @@ export const api = {
     if (!res.ok) throw new ApiError(res.status, await res.text());
     return res.text();
   },
+  blame: (project: string, revision: string, path: string) =>
+    request<BlameLine[]>(
+      `/projects/${encodeURIComponent(project)}/blame?revision=${encodeURIComponent(revision)}&path=${encodeURIComponent(path)}`,
+    ),
+  fileLog: (project: string, revision: string, path: string, n = 50) =>
+    request<FileLogEntry[]>(
+      `/projects/${encodeURIComponent(project)}/file-log?revision=${encodeURIComponent(revision)}&path=${encodeURIComponent(path)}&n=${n}`,
+    ),
   projectAccess: (project: string) =>
     request<ProjectAccess>(`/projects/${encodeURIComponent(project)}/access`),
   setProjectAccess: (project: string, rules: AccessRuleInfo[]) =>
@@ -484,6 +510,8 @@ export const api = {
     }),
   removeReviewer: (num: number | string, id: number) =>
     request<AccountInfo[]>(`/changes/${num}/reviewers/${id}`, { method: "DELETE" }),
+  suggestReviewers: (num: number | string) =>
+    request<AccountInfo[]>(`/changes/${num}/suggest-reviewers`),
   setTopic: (num: number | string, topic: string) =>
     request<{ topic: string }>(`/changes/${num}/topic`, {
       method: "PUT",
@@ -631,7 +659,7 @@ export const api = {
       body: JSON.stringify(id ? { id } : {}),
     }),
 
-  getConfig: () => request<{ auth: { oauth: boolean; ldap?: boolean; register?: boolean } }>("/config"),
+  getConfig: () => request<{ auth: { oauth: boolean; ldap?: boolean; register?: boolean }; ssh?: { port?: string } }>("/config"),
   updateSelf: (body: { name?: string; email?: string }) =>
     request<AccountInfo>("/accounts/self", { method: "PUT", body: JSON.stringify(body) }),
   setPassword: (oldPassword: string, newPassword: string) =>

@@ -38,6 +38,10 @@ export default {
     editOpen: "此变更有一个未发布的编辑",
   },
   ps: "补丁集 {{ps}}",
+  download: {
+    title: "下载",
+    desc: "用以下命令获取此补丁集。",
+  },
   files: {
     title: "文件",
     draftsBadge_one: "{{count}} 条草稿",
@@ -70,6 +74,7 @@ export default {
     title: "评审人",
     empty: "暂无评审人",
     remove: "移除评审人",
+    suggested: "推荐：",
   },
   assignee: {
     title: "负责人",
@@ -153,6 +158,9 @@ export default {
     resolve: "标记为已解决",
     unresolve: "标记为未解决",
     reply: "回复",
+    applySuggestion: "应用建议",
+    applyingSuggestion: "正在应用…",
+    suggestionApplied: "建议已应用到当前编辑",
   },
   drafts: {
     badge: "草稿",

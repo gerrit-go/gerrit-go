@@ -37,6 +37,10 @@ type Service struct {
 	// editLocks serializes change-edit operations per change number so
 	// concurrent amends/publishes on the same edit ref cannot interleave.
 	editLocks sync.Map
+	// OnChangeEvent, when set, is invoked after a refs/for push creates a
+	// change ("change-created") or adds a patch set ("patchset-created"). The
+	// api layer sets it to publish stream-events without gitsvc importing api.
+	OnChangeEvent func(changeNumber int64, kind string)
 }
 
 func New(basePath string, db *store.DB) *Service {
@@ -177,6 +181,7 @@ func (s *Service) upsertChange(repo *git.Repository, project, branch string, c *
 	}
 
 	var change *store.Change
+	created := false
 	if changeID != "" {
 		existing, err := s.db.GetChangeByChangeID(project, branch, changeID)
 		if err == nil {
@@ -202,6 +207,7 @@ func (s *Service) upsertChange(repo *git.Repository, project, branch string, c *
 		if err := s.db.AddReviewer(change.Number, pusher.ID); err != nil {
 			return err
 		}
+		created = true
 	}
 
 	// Duplicate patch set (same commit already uploaded) is a no-op.
@@ -232,7 +238,16 @@ func (s *Service) upsertChange(repo *git.Repository, project, branch string, c *
 	})
 
 	refName := fmt.Sprintf("refs/changes/%02d/%d/%d", change.Number%100, change.Number, num)
-	return repo.Storer.SetReference(plumbing.NewHashReference(plumbing.ReferenceName(refName), c.Hash))
+	if err := repo.Storer.SetReference(plumbing.NewHashReference(plumbing.ReferenceName(refName), c.Hash)); err != nil {
+		return err
+	}
+	if s.OnChangeEvent != nil {
+		if created {
+			s.OnChangeEvent(change.Number, "change-created")
+		}
+		s.OnChangeEvent(change.Number, "patchset-created")
+	}
+	return nil
 }
 
 func generateChangeID() string {

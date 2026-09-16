@@ -19,6 +19,7 @@ func (s *Server) notifyChange(c *store.Change, actorID int64, ev notify.Event) {
 	ev.ActorID = actorID
 	s.notify.Notify(ev)
 	s.emitWebhook(c, ev)
+	s.publishNotifyEvent(c, actorID, ev)
 }
 
 // emitWebhook fans a change event out to project and global webhooks. The

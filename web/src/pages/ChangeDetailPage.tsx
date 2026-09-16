@@ -73,6 +73,8 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { cn, timeAgo } from "@/lib/utils";
+import { highlightLine, langForPath } from "@/lib/highlight";
+import { applySuggestionToLines, parseSuggestion } from "@/lib/suggestion";
 import { StatusBadge } from "@/pages/ChangesPage";
 
 export default function ChangeDetailPage() {
@@ -94,6 +96,15 @@ export default function ChangeDetailPage() {
   const [edit, setEdit] = useState<EditInfo | null>(null);
   const [editFilePath, setEditFilePath] = useState<string | null>(null);
   const [editFileContent, setEditFileContent] = useState("");
+  const [downloadOpen, setDownloadOpen] = useState(false);
+  const [sshPort, setSshPort] = useState("");
+
+  useEffect(() => {
+    api
+      .getConfig()
+      .then((c) => setSshPort(c?.ssh?.port ?? ""))
+      .catch(() => setSshPort(""));
+  }, []);
 
   const load = useCallback(async () => {
     if (!num) return;
@@ -167,7 +178,23 @@ export default function ChangeDetailPage() {
     }
   };
 
-  const checkoutCmd = `git fetch ${window.location.origin}/git/${change.project}.git refs/changes/${String(change._number % 100).padStart(2, "0")}/${change._number}/${currentPS} && git checkout FETCH_HEAD`;
+  const [applyingSuggestion, setApplyingSuggestion] = useState(false);
+  const applySuggestion = async (comment: CommentInfo, suggestion: string) => {
+    if (!change || change.status !== "NEW") return;
+    setApplyingSuggestion(true);
+    setError("");
+    try {
+      const content = await api.revisionFileContent(change._number, "current", comment.path);
+      const updated = applySuggestionToLines(content, comment.line, suggestion);
+      const ed = await api.putEditFile(change._number, comment.path, updated);
+      setEdit(ed);
+      setActionMsg(t("comments.suggestionApplied"));
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setApplyingSuggestion(false);
+    }
+  };
 
   return (
     <div className="flex flex-col gap-5">
@@ -309,23 +336,10 @@ export default function ChangeDetailPage() {
               {t("actions.restore")}
             </Button>
           )}
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button size="sm" variant="secondary">
-                {t("actions.download")}
-                <ChevronDown className="size-3" />
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="start" className="max-w-sm">
-              <DropdownMenuItem
-                className="font-mono text-xs"
-                onSelect={() => navigator.clipboard.writeText(checkoutCmd)}
-              >
-                <Copy className="size-3" />
-                {t("actions.copyCheckout")}
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
+          <Button size="sm" variant="secondary" onClick={() => setDownloadOpen(true)}>
+            {t("actions.download")}
+            <ChevronDown className="size-3" />
+          </Button>
           {user && (
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
@@ -470,6 +484,14 @@ export default function ChangeDetailPage() {
             }}
             onError={setError}
           />
+          <DownloadDialog
+            open={downloadOpen}
+            onOpenChange={setDownloadOpen}
+            change={change}
+            currentPS={currentPS}
+            sshPort={sshPort}
+            username={user?.username ?? ""}
+          />
           <div className="ml-auto flex items-center gap-2">
             {revisions.length > 1 && (
               <select
@@ -586,6 +608,8 @@ export default function ChangeDetailPage() {
                         comments={comments.filter((c) => c.path === f.path)}
                         drafts={drafts.filter((d) => d.path === f.path)}
                         canComment={!!user && change.status === "NEW"}
+                        onApplySuggestion={change.status === "NEW" ? applySuggestion : undefined}
+                        applyingSuggestion={applyingSuggestion}
                         reload={load}
                       />
                     </div>
@@ -851,15 +875,26 @@ function ReviewersCard({
   const [value, setValue] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
+  const [suggestions, setSuggestions] = useState<AccountInfo[]>([]);
   const reviewers: AccountInfo[] = change.reviewers ?? [];
 
-  const add = async () => {
-    if (!value.trim()) return;
+  useEffect(() => {
+    if (!canEdit) return;
+    api
+      .suggestReviewers(change._number)
+      .then((s) => setSuggestions(s ?? []))
+      .catch(() => setSuggestions([]));
+  }, [change._number, canEdit]);
+
+  const add = async (name?: string) => {
+    const reviewer = (name ?? value).trim();
+    if (!reviewer) return;
     setBusy(true);
     setErr("");
     try {
-      await api.addReviewer(change._number, value.trim());
+      await api.addReviewer(change._number, reviewer);
       setValue("");
+      setSuggestions((s) => s.filter((a) => a.username !== reviewer));
       await onDone();
     } catch (e) {
       setErr((e as Error).message);
@@ -914,19 +949,39 @@ function ReviewersCard({
           </ul>
         )}
         {canEdit && (
-          <div className="flex gap-1.5">
-            <Input
-              value={value}
-              onChange={(e) => setValue(e.target.value)}
-              placeholder={t("placeholder.username")}
-              className="h-8 text-xs"
-              onKeyDown={(e) => {
-                if (e.key === "Enter") add();
-              }}
-            />
-            <Button size="sm" variant="outline" disabled={busy || !value.trim()} onClick={add}>
-              <UserPlus className="size-4" />
-            </Button>
+          <div className="flex flex-col gap-1.5">
+            {suggestions.filter((a) => a._account_id !== ownerId && !reviewers.some((rv) => rv._account_id === a._account_id)).length > 0 && (
+              <div className="flex flex-wrap items-center gap-1">
+                <span className="text-[11px] text-muted-foreground">{t("reviewers.suggested")}</span>
+                {suggestions
+                  .filter((a) => a._account_id !== ownerId && !reviewers.some((rv) => rv._account_id === a._account_id))
+                  .map((a) => (
+                    <button
+                      key={a._account_id}
+                      className="flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] text-muted-foreground hover:border-primary hover:text-foreground disabled:opacity-50"
+                      onClick={() => add(a.username)}
+                      disabled={busy}
+                    >
+                      <UserPlus className="size-3" />
+                      {a.name || a.username}
+                    </button>
+                  ))}
+              </div>
+            )}
+            <div className="flex gap-1.5">
+              <Input
+                value={value}
+                onChange={(e) => setValue(e.target.value)}
+                placeholder={t("placeholder.username")}
+                className="h-8 text-xs"
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") add();
+                }}
+              />
+              <Button size="sm" variant="outline" disabled={busy || !value.trim()} onClick={() => add()}>
+                <UserPlus className="size-4" />
+              </Button>
+            </div>
           </div>
         )}
         {err && <p className="text-xs text-destructive">{err}</p>}
@@ -1525,6 +1580,84 @@ function ChangeEditDialog({
   );
 }
 
+function DownloadDialog({
+  open,
+  onOpenChange,
+  change,
+  currentPS,
+  sshPort,
+  username,
+}: {
+  open: boolean;
+  onOpenChange: (v: boolean) => void;
+  change: ChangeInfo;
+  currentPS: number;
+  sshPort: string;
+  username: string;
+}) {
+  const { t } = useTranslation("changeDetail");
+  const [scheme, setScheme] = useState<"http" | "ssh">("http");
+  const [copied, setCopied] = useState("");
+
+  const ref = `refs/changes/${String(change._number % 100).padStart(2, "0")}/${change._number}/${currentPS}`;
+  const httpURL = `${window.location.origin}/git/${change.project}.git`;
+  const sshURL = sshPort
+    ? `ssh://${username ? username + "@" : ""}${window.location.hostname}:${sshPort}/${change.project}.git`
+    : "";
+  const hasSSH = sshPort !== "";
+  const base = scheme === "ssh" && hasSSH ? sshURL : httpURL;
+
+  const commands: { key: string; label: string; cmd: string }[] = [
+    { key: "checkout", label: "Checkout", cmd: `git fetch ${base} ${ref} && git checkout FETCH_HEAD` },
+    { key: "fetch", label: "Fetch", cmd: `git fetch ${base} ${ref}` },
+    { key: "cherrypick", label: "Cherry Pick", cmd: `git fetch ${base} ${ref} && git cherry-pick FETCH_HEAD` },
+    { key: "pull", label: "Pull", cmd: `git pull ${base} ${ref}` },
+    { key: "patch", label: "Patch", cmd: `git fetch ${base} ${ref} && git format-patch -1 --stdout FETCH_HEAD` },
+  ];
+
+  const copy = async (key: string, cmd: string) => {
+    try {
+      await navigator.clipboard.writeText(cmd);
+      setCopied(key);
+      setTimeout(() => setCopied(""), 1500);
+    } catch {
+      /* clipboard unavailable */
+    }
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="sm:max-w-xl">
+        <DialogHeader>
+          <DialogTitle>{t("download.title")}</DialogTitle>
+          <DialogDescription>{t("download.desc")}</DialogDescription>
+        </DialogHeader>
+        <div className="flex items-center gap-0.5 rounded-md border p-0.5 self-start">
+          <Button size="sm" variant={scheme === "http" ? "secondary" : "ghost"} className="h-7 px-2 text-xs" onClick={() => setScheme("http")}>
+            HTTP
+          </Button>
+          <Button size="sm" variant={scheme === "ssh" ? "secondary" : "ghost"} className="h-7 px-2 text-xs" onClick={() => setScheme("ssh")} disabled={!hasSSH}>
+            SSH
+          </Button>
+        </div>
+        <div className="flex flex-col gap-2">
+          {commands.map((c) => (
+            <div key={c.key} className="flex items-center gap-2">
+              <span className="w-24 shrink-0 text-xs text-muted-foreground">{c.label}</span>
+              <code className="min-w-0 flex-1 truncate rounded bg-muted/40 px-2 py-1 font-mono text-[11px]" title={c.cmd}>
+                {c.cmd}
+              </code>
+              <Button size="sm" variant="ghost" className="h-7 shrink-0 px-2" onClick={() => copy(c.key, c.cmd)}>
+                {copied === c.key ? <ClipboardCheck className="size-3.5 text-emerald-600" /> : <Copy className="size-3.5" />}
+              </Button>
+            </div>
+          ))}
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 function CherryPickDialog({
   open,
   onOpenChange,
@@ -1844,6 +1977,8 @@ function DiffView({
   comments,
   drafts,
   canComment,
+  onApplySuggestion,
+  applyingSuggestion,
   reload,
 }: {
   file: FileDiff;
@@ -1852,11 +1987,14 @@ function DiffView({
   comments: CommentInfo[];
   drafts: CommentDraftInfo[];
   canComment: boolean;
+  onApplySuggestion?: (comment: CommentInfo, suggestion: string) => void;
+  applyingSuggestion?: boolean;
   reload: () => Promise<void>;
 }) {
   const { t } = useTranslation("changeDetail");
   const [editor, setEditor] = useState<EditorState | null>(null);
   const [busy, setBusy] = useState(false);
+  const lang = langForPath(file.path);
 
   if (file.binary) {
     return <p className="bg-muted/30 px-4 py-3 text-xs text-muted-foreground">{t("diff.binary")}</p>;
@@ -1939,6 +2077,8 @@ function DiffView({
           busy={busy}
           onResolve={() => toggleResolve(c)}
           onReply={() => setEditor({ line: anchor, message: "", inReplyTo: c.id })}
+          onApplySuggestion={onApplySuggestion}
+          applyingSuggestion={applyingSuggestion}
         />
       ))}
       {ds.map((d) => (
@@ -1981,8 +2121,8 @@ function DiffView({
               return (
                 <div key={ri}>
                   <div className="grid grid-cols-2">
-                    <SplitCell line={row.left} side="left" onClick={() => row.left && openNew(row.left)} canComment={canComment} />
-                    <SplitCell line={row.right} side="right" onClick={() => row.right && openNew(row.right)} canComment={canComment} />
+                    <SplitCell line={row.left} side="left" lang={lang} onClick={() => row.left && openNew(row.left)} canComment={canComment} />
+                    <SplitCell line={row.right} side="right" lang={lang} onClick={() => row.right && openNew(row.right)} canComment={canComment} />
                   </div>
                   {(cs.length > 0 || ds.length > 0 || editor?.line === anchor) && (
                     <div className="border-y bg-muted/20">{renderThread(cs, ds, anchor)}</div>
@@ -2037,7 +2177,10 @@ function DiffView({
                   >
                     {line.type === "add" ? "+" : line.type === "del" ? "−" : " "}
                   </span>
-                  <span className="whitespace-pre pr-4">{line.text}</span>
+                  <span
+                    className="whitespace-pre pr-4"
+                    dangerouslySetInnerHTML={{ __html: highlightLine(line.text, lang) }}
+                  />
                   {canComment && (
                     <span className="ml-auto hidden shrink-0 items-center pr-2 text-muted-foreground group-hover:flex">
                       <MessageSquarePlus className="size-3.5" />
@@ -2061,11 +2204,13 @@ function SplitCell({
   line,
   side,
   canComment,
+  lang,
   onClick,
 }: {
   line: DiffLine | null;
   side: "left" | "right";
   canComment: boolean;
+  lang?: string;
   onClick: () => void;
 }) {
   if (!line) {
@@ -2093,7 +2238,10 @@ function SplitCell({
       >
         {show ? (line.type === "add" ? "+" : line.type === "del" ? "−" : " ") : ""}
       </span>
-      <span className="whitespace-pre-wrap break-all pr-2">{show ? line.text : ""}</span>
+      <span
+        className="whitespace-pre-wrap break-all pr-2"
+        dangerouslySetInnerHTML={{ __html: show ? highlightLine(line.text, lang) : "" }}
+      />
       {canComment && (
         <span className="ml-auto hidden shrink-0 items-center text-muted-foreground group-hover:flex">
           <MessageSquarePlus className="size-3.5" />
@@ -2109,14 +2257,19 @@ function CommentCard({
   busy,
   onResolve,
   onReply,
+  onApplySuggestion,
+  applyingSuggestion,
 }: {
   comment: CommentInfo;
   canComment: boolean;
   busy: boolean;
   onResolve: () => void;
   onReply: () => void;
+  onApplySuggestion?: (comment: CommentInfo, suggestion: string) => void;
+  applyingSuggestion?: boolean;
 }) {
   const { t } = useTranslation("changeDetail");
+  const suggestion = parseSuggestion(comment.message);
   return (
     <div className="flex min-w-max gap-2 border-b bg-amber-50/70 px-14 py-2 last:border-b-0 dark:bg-amber-950/20">
       <div className="min-w-0 flex-1 font-sans">
@@ -2134,6 +2287,11 @@ function CommentCard({
         <p className={cn("whitespace-pre-wrap text-xs text-muted-foreground", comment.resolved && "opacity-60 line-through")}>
           {comment.message}
         </p>
+        {suggestion !== null && (
+          <pre className="mt-1 overflow-x-auto rounded border bg-muted/40 p-2 font-mono text-[11px] leading-4 text-foreground">
+            {suggestion}
+          </pre>
+        )}
         <div className="mt-1 flex items-center gap-3 text-[11px]">
           <button
             className="flex items-center gap-1 text-muted-foreground hover:text-foreground disabled:opacity-50"
@@ -2150,6 +2308,16 @@ function CommentCard({
             >
               <CornerDownRight className="size-3" />
               {t("comments.reply")}
+            </button>
+          )}
+          {suggestion !== null && onApplySuggestion && (
+            <button
+              className="flex items-center gap-1 text-primary hover:underline disabled:opacity-50"
+              onClick={() => onApplySuggestion(comment, suggestion)}
+              disabled={busy || applyingSuggestion}
+            >
+              <Check className="size-3" />
+              {applyingSuggestion ? t("comments.applyingSuggestion") : t("comments.applySuggestion")}
             </button>
           )}
         </div>
