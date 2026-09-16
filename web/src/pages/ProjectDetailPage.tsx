@@ -2,7 +2,8 @@ import { useEffect, useMemo, useState } from "react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { Bell, BellOff, ChevronRight, File, Folder, GitCommitHorizontal, Pencil, Terminal } from "lucide-react";
-import { api, type BranchInfo, type CommitInfo, type FileEntry } from "@/lib/api";
+import { api, type BlameLine, type BranchInfo, type CommitInfo, type FileEntry, type FileLogEntry } from "@/lib/api";
+import { highlightBlock, highlightLine, langForPath } from "@/lib/highlight";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Button } from "@/components/ui/button";
@@ -44,6 +45,9 @@ export default function ProjectDetailPage() {
   const [entries, setEntries] = useState<FileEntry[] | null>(null);
   const [commits, setCommits] = useState<CommitInfo[] | null>(null);
   const [fileText, setFileText] = useState<string | null>(null);
+  const [fileView, setFileView] = useState<"code" | "blame" | "history">("code");
+  const [blameLines, setBlameLines] = useState<BlameLine[] | null>(null);
+  const [fileHistory, setFileHistory] = useState<FileLogEntry[] | null>(null);
   const [error, setError] = useState("");
   const [projectState, setProjectState] = useState("ACTIVE");
   const [canEdit, setCanEdit] = useState(false);
@@ -92,6 +96,23 @@ export default function ProjectDetailPage() {
       .then(setFileText)
       .catch(() => setFileText(t("fileLoadFailed")));
   }, [project, viewFile, revision, rev, t]);
+
+  useEffect(() => {
+    setBlameLines(null);
+    setFileHistory(null);
+    if (!viewFile) return;
+    if (fileView === "blame") {
+      api
+        .blame(project, revision || rev, viewFile)
+        .then(setBlameLines)
+        .catch(() => setBlameLines([]));
+    } else if (fileView === "history") {
+      api
+        .fileLog(project, revision || rev, viewFile)
+        .then(setFileHistory)
+        .catch(() => setFileHistory([]));
+    }
+  }, [project, viewFile, revision, rev, fileView]);
 
   const crumbs = useMemo(() => {
     if (!dirPath) return [];
@@ -167,20 +188,82 @@ export default function ProjectDetailPage() {
                   {t("backToFiles")}
                 </button>
                 <span className="ml-auto font-mono text-sm">{viewFile}</span>
-                {canEdit && projectState === "ACTIVE" && fileText !== null && (
+                <div className="flex items-center gap-0.5 rounded-md border p-0.5">
+                  {(["code", "blame", "history"] as const).map((m) => (
+                    <Button
+                      key={m}
+                      size="sm"
+                      variant={fileView === m ? "secondary" : "ghost"}
+                      className="h-7 px-2 text-xs"
+                      onClick={() => setFileView(m)}
+                    >
+                      {m === "code" ? t("viewCode") : m === "blame" ? t("viewBlame") : t("viewHistory")}
+                    </Button>
+                  ))}
+                </div>
+                {canEdit && projectState === "ACTIVE" && fileText !== null && fileView === "code" && (
                   <Button size="sm" variant="outline" onClick={() => setEditOpen(true)}>
                     <Pencil className="size-3.5" />
                     {t("common:action.edit")}
                   </Button>
                 )}
               </div>
-              {fileText === null ? (
-                <Skeleton className="m-4 h-64 w-auto" />
-              ) : (
-                <pre className="max-h-[70vh] overflow-auto bg-zinc-950 p-4 text-xs leading-5 text-zinc-100">
-                  <code>{fileText}</code>
-                </pre>
-              )}
+              {fileView === "code" &&
+                (fileText === null ? (
+                  <Skeleton className="m-4 h-64 w-auto" />
+                ) : (
+                  <pre className="max-h-[70vh] overflow-auto bg-muted/30 p-4 text-xs leading-5 text-foreground">
+                    <code
+                      dangerouslySetInnerHTML={{
+                        __html: highlightBlock(fileText, langForPath(viewFile)),
+                      }}
+                    />
+                  </pre>
+                ))}
+              {fileView === "blame" &&
+                (blameLines === null ? (
+                  <Skeleton className="m-4 h-64 w-auto" />
+                ) : (
+                  <div className="max-h-[70vh] overflow-auto bg-muted/30 font-mono text-xs leading-5">
+                    {blameLines.map((l) => (
+                      <div key={l.line} className="flex hover:bg-accent/40">
+                        <span className="w-14 shrink-0 select-none border-r px-2 text-right text-muted-foreground/70">
+                          {l.line}
+                        </span>
+                        <span
+                          className="w-40 shrink-0 select-none truncate border-r px-2 text-muted-foreground"
+                          title={`${l.author} · ${l.summary}`}
+                        >
+                          {l.author || l.sha.slice(0, 8)}
+                        </span>
+                        <span className="w-20 shrink-0 select-none border-r px-2 text-muted-foreground/70">
+                          {timeAgo(new Date(l.when * 1000).toISOString())}
+                        </span>
+                        <span
+                          className="whitespace-pre px-2 text-foreground"
+                          dangerouslySetInnerHTML={{ __html: highlightLine(l.text, langForPath(viewFile)) }}
+                        />
+                      </div>
+                    ))}
+                  </div>
+                ))}
+              {fileView === "history" &&
+                (fileHistory === null ? (
+                  <Skeleton className="m-4 h-64 w-auto" />
+                ) : fileHistory.length === 0 ? (
+                  <p className="p-6 text-center text-sm text-muted-foreground">{t("historyEmpty")}</p>
+                ) : (
+                  <div className="max-h-[70vh] divide-y overflow-auto">
+                    {fileHistory.map((e) => (
+                      <div key={e.sha} className="flex items-center gap-3 px-4 py-2 text-sm">
+                        <code className="shrink-0 font-mono text-xs text-muted-foreground">{e.sha.slice(0, 10)}</code>
+                        <span className="min-w-0 flex-1 truncate">{e.subject}</span>
+                        <span className="shrink-0 text-muted-foreground">{e.author}</span>
+                        <span className="shrink-0 text-xs text-muted-foreground/70">{timeAgo(new Date(e.when * 1000).toISOString())}</span>
+                      </div>
+                    ))}
+                  </div>
+                ))}
             </div>
           ) : (
             <div className="rounded-lg border">

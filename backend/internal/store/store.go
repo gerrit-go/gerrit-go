@@ -699,6 +699,12 @@ func (d *DB) SetProjectParent(name, parent string) error {
 	return err
 }
 
+// SetProjectDescription updates a project's description.
+func (d *DB) SetProjectDescription(name, description string) error {
+	_, err := d.db.Exec(`UPDATE projects SET description=? WHERE name=?`, description, name)
+	return err
+}
+
 // ---------- changes ----------
 
 func (d *DB) CreateChange(c *Change) error {
@@ -1234,6 +1240,55 @@ func (d *DB) ListReviewers(changeNumber int64) ([]*Reviewer, error) {
 			r.Name = r.Username
 		}
 		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+// SuggestReviewers ranks candidate reviewers for a change by how frequently
+// each account has participated in the same project's recent changes (as a
+// reviewer or as an owner), excluding the given account IDs (the change owner
+// and its current reviewers). It returns up to limit accounts, most active
+// first.
+func (d *DB) SuggestReviewers(project string, excludeChange int64, excludeIDs []int64, limit int) ([]*Account, error) {
+	if limit <= 0 || limit > 20 {
+		limit = 5
+	}
+	// Count participation across the project's other changes, weighting
+	// reviewer and owner activity equally.
+	rows, err := d.db.Query(`
+		SELECT account_id, COUNT(*) AS freq FROM (
+			SELECT rv.account_id AS account_id FROM reviewers rv
+			JOIN changes c ON c.number = rv.change_number
+			WHERE c.project = ? AND c.number != ?
+			UNION ALL
+			SELECT c.owner_id AS account_id FROM changes c
+			WHERE c.project = ? AND c.number != ?
+		) GROUP BY account_id ORDER BY freq DESC LIMIT ?`, project, excludeChange, project, excludeChange, limit*4)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	excluded := map[int64]bool{}
+	for _, id := range excludeIDs {
+		excluded[id] = true
+	}
+	var out []*Account
+	for rows.Next() {
+		var id, freq int64
+		if err := rows.Scan(&id, &freq); err != nil {
+			return nil, err
+		}
+		if excluded[id] {
+			continue
+		}
+		a, err := d.GetAccount(id)
+		if err != nil {
+			continue
+		}
+		out = append(out, a)
+		if len(out) >= limit {
+			break
+		}
 	}
 	return out, rows.Err()
 }

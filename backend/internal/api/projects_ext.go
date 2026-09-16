@@ -3,6 +3,7 @@ package api
 import (
 	"errors"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"gerrit-go/internal/gitsvc"
@@ -24,6 +25,35 @@ func mapGitErr(err error) int {
 	default:
 		return http.StatusInternalServerError
 	}
+}
+
+// handleBlame returns per-line blame annotations for a file at a revision.
+func (s *Server) handleBlame(w http.ResponseWriter, r *http.Request) {
+	project := r.PathValue("name")
+	if !s.ensureProjectRead(w, r, project) {
+		return
+	}
+	lines, err := s.git.Blame(project, r.URL.Query().Get("revision"), r.URL.Query().Get("path"))
+	if err != nil {
+		writeErr(w, mapGitErr(err), err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, lines)
+}
+
+// handleFileLog returns the commit history of a single file at a revision.
+func (s *Server) handleFileLog(w http.ResponseWriter, r *http.Request) {
+	project := r.PathValue("name")
+	if !s.ensureProjectRead(w, r, project) {
+		return
+	}
+	limit, _ := strconv.Atoi(r.URL.Query().Get("n"))
+	entries, err := s.git.FileLog(project, r.URL.Query().Get("revision"), r.URL.Query().Get("path"), limit)
+	if err != nil {
+		writeErr(w, mapGitErr(err), err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, entries)
 }
 
 // ---------- branches ----------
