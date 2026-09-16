@@ -754,23 +754,44 @@ export default function ChangeDetailPage() {
                   {t("relations.title")}
                 </CardTitle>
               </CardHeader>
-              <CardContent className="flex flex-col gap-1 px-4 text-sm">
-                {change.relation_chain.map((rel) => (
-                  <Link
-                    key={rel._number}
-                    to={`/c/${rel._number}`}
-                    className={cn(
-                      "flex items-center gap-2 rounded-md px-2 py-1.5 hover:bg-accent",
-                      rel.self && "bg-accent font-medium",
-                    )}
-                  >
-                    <span className="font-mono text-xs text-muted-foreground">#{rel._number}</span>
-                    <span className="truncate">{rel.subject}</span>
-                    <span className="ml-auto shrink-0">
-                      <StatusBadge status={rel.status} />
-                    </span>
-                  </Link>
-                ))}
+              <CardContent className="flex flex-col px-4 text-sm">
+                {change.relation_chain.map((rel, i) => {
+                  const isSelf = rel.self || rel.relation === "self";
+                  const isLast = i === change.relation_chain!.length - 1;
+                  return (
+                    <div key={rel._number} className="flex gap-2">
+                      <div className="flex w-4 shrink-0 flex-col items-center">
+                        <span className={cn("w-px flex-1 bg-border", i === 0 && "bg-transparent")} />
+                        <span
+                          className={cn(
+                            "my-0.5 size-2.5 shrink-0 rounded-full border-2",
+                            isSelf
+                              ? "border-primary bg-primary"
+                              : rel.status === "MERGED"
+                                ? "border-emerald-500 bg-emerald-500"
+                                : rel.status === "ABANDONED"
+                                  ? "border-muted-foreground/40 bg-muted-foreground/40"
+                                  : "border-muted-foreground/50 bg-background",
+                          )}
+                        />
+                        <span className={cn("w-px flex-1 bg-border", isLast && "bg-transparent")} />
+                      </div>
+                      <Link
+                        to={`/c/${rel._number}`}
+                        className={cn(
+                          "flex min-w-0 flex-1 items-center gap-2 rounded-md px-2 py-1.5 hover:bg-accent",
+                          isSelf && "bg-accent font-medium",
+                        )}
+                      >
+                        <span className="font-mono text-xs text-muted-foreground">#{rel._number}</span>
+                        <span className="truncate">{rel.subject}</span>
+                        <span className="ml-auto shrink-0">
+                          <StatusBadge status={rel.status} />
+                        </span>
+                      </Link>
+                    </div>
+                  );
+                })}
               </CardContent>
             </Card>
           )}
@@ -2275,6 +2296,11 @@ function CommentCard({
       <div className="min-w-0 flex-1 font-sans">
         <div className="flex flex-wrap items-center gap-1.5 text-xs">
           <span className="font-semibold">{comment.author.name}</span>
+          {comment.robot_id && (
+            <Badge variant="muted" className="text-[10px]" title={comment.robot_run_id || comment.robot_id}>
+              {comment.robot_id}
+            </Badge>
+          )}
           <span className="text-muted-foreground">
             · {t("ps", { ps: comment.patch_set })} · {timeAgo(comment.updated)}
           </span>

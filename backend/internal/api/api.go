@@ -1131,7 +1131,7 @@ func (s *Server) handleListComments(w http.ResponseWriter, r *http.Request) {
 	}
 	out := make([]map[string]any, 0, len(comments))
 	for _, c := range comments {
-		out = append(out, map[string]any{
+		entry := map[string]any{
 			"id":          c.ID,
 			"patch_set":   c.PatchSet,
 			"path":        c.File,
@@ -1145,7 +1145,12 @@ func (s *Server) handleListComments(w http.ResponseWriter, r *http.Request) {
 				"name":        orDefault(c.AuthorName, c.AuthorUser),
 				"username":    c.AuthorUser,
 			},
-		})
+		}
+		if c.RobotID != "" {
+			entry["robot_id"] = c.RobotID
+			entry["robot_run_id"] = c.RobotRunID
+		}
+		out = append(out, entry)
 	}
 	writeJSON(w, http.StatusOK, out)
 }
@@ -1170,9 +1175,11 @@ func (s *Server) handleReview(w http.ResponseWriter, r *http.Request) {
 		Labels   map[string]int `json:"labels"`
 		Message  string         `json:"message"`
 		Comments map[string][]struct {
-			Line      int    `json:"line"`
-			Message   string `json:"message"`
-			InReplyTo int64  `json:"in_reply_to"`
+			Line       int    `json:"line"`
+			Message    string `json:"message"`
+			InReplyTo  int64  `json:"in_reply_to"`
+			RobotID    string `json:"robot_id"`
+			RobotRunID string `json:"robot_run_id"`
 		} `json:"comments"`
 	}
 	if err := decodeJSON(r, &req); err != nil {
@@ -1235,6 +1242,7 @@ func (s *Server) handleReview(w http.ResponseWriter, r *http.Request) {
 			s.db.CreateComment(&store.Comment{
 				ChangeNum: c.Number, PatchSet: c.CurrentPS, File: file,
 				Line: cm.Line, Message: cm.Message, AuthorID: acct.ID, InReplyTo: cm.InReplyTo,
+				RobotID: cm.RobotID, RobotRunID: cm.RobotRunID,
 			})
 		}
 	}
@@ -1865,7 +1873,8 @@ func (s *Server) handleAddReviewer(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, s.reviewersFor(c.Number))
 }
 
-// handleSuggestReviewers returns accounts suggested as reviewers for a change,
+// handleSuggestReviewers returns accounts suggested as reviewers for a change.
+// OWNERS-file matches for the touched paths rank first, followed by accounts
 // ranked by their activity on the project's other changes. The change owner and
 // its current reviewers are excluded.
 func (s *Server) handleSuggestReviewers(w http.ResponseWriter, r *http.Request) {
@@ -1883,19 +1892,81 @@ func (s *Server) handleSuggestReviewers(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	exclude := []int64{c.OwnerID}
+	excludeSet := map[int64]bool{c.OwnerID: true}
 	for _, rv := range s.reviewersOf(c.Number) {
 		exclude = append(exclude, rv.AccountID)
+		excludeSet[rv.AccountID] = true
 	}
-	suggested, err := s.db.SuggestReviewers(c.Project, c.Number, exclude, 5)
-	if err != nil {
-		writeErr(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	out := make([]map[string]any, 0, len(suggested))
-	for _, a := range suggested {
+
+	var out []map[string]any
+	seen := map[int64]bool{}
+	addAcct := func(a *store.Account) {
+		if a == nil || seen[a.ID] || len(out) >= 5 {
+			return
+		}
+		seen[a.ID] = true
 		out = append(out, accountInfo(a))
 	}
+	for _, a := range s.ownersReviewers(c, excludeSet) {
+		addAcct(a)
+	}
+	heuristic, err := s.db.SuggestReviewers(c.Project, c.Number, exclude, 5)
+	if err == nil {
+		for _, a := range heuristic {
+			addAcct(a)
+		}
+	}
 	writeJSON(w, http.StatusOK, out)
+}
+
+// ownersReviewers resolves OWNERS-file entries governing the change's touched
+// paths to accounts, deepest-directory first, excluding the given account IDs.
+// Any git/parse failure degrades silently to no OWNERS suggestions.
+func (s *Server) ownersReviewers(c *store.Change, exclude map[int64]bool) []*store.Account {
+	diffs, err := s.git.PatchSetDiff(c.Number, c.CurrentPS)
+	if err != nil {
+		return nil
+	}
+	var paths []string
+	for _, fd := range diffs {
+		paths = append(paths, fd.Path)
+		if fd.OldPath != "" {
+			paths = append(paths, fd.OldPath)
+		}
+	}
+	if len(paths) == 0 {
+		return nil
+	}
+	entries, err := s.git.OwnersForPaths(c.Project, "refs/heads/"+c.Branch, paths)
+	if err != nil {
+		entries, err = s.git.OwnersForPaths(c.Project, "", paths)
+		if err != nil {
+			return nil
+		}
+	}
+	var out []*store.Account
+	seen := map[int64]bool{}
+	for _, e := range entries {
+		var a *store.Account
+		if strings.Contains(e, "@") {
+			if acct, err := s.db.GetAccountByEmail(e); err == nil {
+				a = acct
+			} else if acct, err := s.db.GetAccountByUsername(e); err == nil {
+				a = acct
+			}
+		} else {
+			if acct, err := s.db.GetAccountByUsername(e); err == nil {
+				a = acct
+			} else if acct, err := s.db.GetAccountByEmail(e); err == nil {
+				a = acct
+			}
+		}
+		if a != nil && !exclude[a.ID] && !seen[a.ID] {
+			seen[a.ID] = true
+			out = append(out, a)
+		}
+	}
+	return out
 }
 
 func (s *Server) handleDeleteReviewer(w http.ResponseWriter, r *http.Request) {

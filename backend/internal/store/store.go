@@ -86,6 +86,8 @@ type Comment struct {
 	Created    time.Time `json:"updated"`
 	InReplyTo  int64     `json:"in_reply_to,omitempty"`
 	Resolved   bool      `json:"resolved"`
+	RobotID    string    `json:"robot_id,omitempty"`
+	RobotRunID string    `json:"robot_run_id,omitempty"`
 }
 
 // CommentDraft is a private, unpublished inline comment owned by one account.
@@ -226,6 +228,8 @@ CREATE TABLE IF NOT EXISTS comments (
   author_id INTEGER NOT NULL REFERENCES accounts(id),
   in_reply_to INTEGER NOT NULL DEFAULT 0,
   resolved INTEGER NOT NULL DEFAULT 0,
+  robot_id TEXT NOT NULL DEFAULT '',
+  robot_run_id TEXT NOT NULL DEFAULT '',
   created TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS comment_drafts (
@@ -408,6 +412,14 @@ func migrate(db *sql.DB, drv string) error {
 	}
 	if err := addColumnIfMissing(db, drv, "comments", "resolved", "resolved INTEGER NOT NULL DEFAULT 0"); err != nil {
 		return err
+	}
+	for _, col := range []struct{ name, def string }{
+		{"robot_id", "robot_id TEXT NOT NULL DEFAULT ''"},
+		{"robot_run_id", "robot_run_id TEXT NOT NULL DEFAULT ''"},
+	} {
+		if err := addColumnIfMissing(db, drv, "comments", col.name, col.def); err != nil {
+			return err
+		}
 	}
 	for _, col := range []struct{ name, def string }{
 		{"http_password_hash", "http_password_hash TEXT NOT NULL DEFAULT ''"},
@@ -1016,10 +1028,10 @@ func (d *DB) ListVotes(changeNumber int64) ([]*VoteInfo, error) {
 
 func (d *DB) CreateComment(c *Comment) error {
 	id, err := d.insertID(`
-		INSERT INTO comments(change_number, patch_set, file, line, message, author_id, in_reply_to, created)
-		VALUES(?,?,?,?,?,?,?,?)`,
+		INSERT INTO comments(change_number, patch_set, file, line, message, author_id, in_reply_to, robot_id, robot_run_id, created)
+		VALUES(?,?,?,?,?,?,?,?,?,?)`,
 		"id",
-		c.ChangeNum, c.PatchSet, c.File, c.Line, c.Message, c.AuthorID, c.InReplyTo, now())
+		c.ChangeNum, c.PatchSet, c.File, c.Line, c.Message, c.AuthorID, c.InReplyTo, c.RobotID, c.RobotRunID, now())
 	if err != nil {
 		return err
 	}
@@ -1030,7 +1042,7 @@ func (d *DB) CreateComment(c *Comment) error {
 
 func (d *DB) ListComments(changeNumber int64) ([]*Comment, error) {
 	rows, err := d.db.Query(`
-		SELECT c.id, c.change_number, c.patch_set, c.file, c.line, c.message, c.author_id, c.in_reply_to, c.resolved, c.created,
+		SELECT c.id, c.change_number, c.patch_set, c.file, c.line, c.message, c.author_id, c.in_reply_to, c.resolved, c.robot_id, c.robot_run_id, c.created,
 		       a.full_name, a.username
 		FROM comments c JOIN accounts a ON a.id = c.author_id
 		WHERE c.change_number=? ORDER BY c.created`, changeNumber)
@@ -1043,7 +1055,7 @@ func (d *DB) ListComments(changeNumber int64) ([]*Comment, error) {
 		c := &Comment{}
 		var created string
 		var resolved int
-		if err := rows.Scan(&c.ID, &c.ChangeNum, &c.PatchSet, &c.File, &c.Line, &c.Message, &c.AuthorID, &c.InReplyTo, &resolved, &created,
+		if err := rows.Scan(&c.ID, &c.ChangeNum, &c.PatchSet, &c.File, &c.Line, &c.Message, &c.AuthorID, &c.InReplyTo, &resolved, &c.RobotID, &c.RobotRunID, &created,
 			&c.AuthorName, &c.AuthorUser); err != nil {
 			return nil, err
 		}

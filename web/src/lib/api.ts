@@ -148,6 +148,8 @@ export interface CommentInfo {
   message: string;
   in_reply_to?: number;
   resolved?: boolean;
+  robot_id?: string;
+  robot_run_id?: string;
   updated: string;
   author: AccountInfo;
 }
