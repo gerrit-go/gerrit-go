@@ -109,6 +109,17 @@ export default {
     destination: "目标分支",
     busy: "正在拣选…",
   },
+  conflict: {
+    title: "解决变更 {{num}} 的变基冲突",
+    description: "编辑每个冲突文件以移除冲突标记，或直接选择某一侧，然后继续变基。",
+    useOurs: "使用目标分支",
+    useTheirs: "使用本变更",
+    useBase: "使用基础版本",
+    empty: "未检测到冲突。",
+    busy: "正在解决…",
+    submit: "解决并继续",
+    resolved: "变基冲突已解决，已创建新的补丁集。",
+  },
   details: {
     title: "详情",
     commit: "提交",

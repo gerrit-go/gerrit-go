@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
-import { Copy, KeyRound, Plus, ShieldCheck, Trash2, User } from "lucide-react";
+import { Copy, KeyRound, Plus, ShieldCheck, Smartphone, Trash2, User } from "lucide-react";
 import { api, type AccountInfo, type SSHKeyInfo } from "@/lib/api";
 import { useAuth } from "@/auth";
 import { Button } from "@/components/ui/button";
@@ -30,6 +30,7 @@ export default function SettingsPage() {
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
         <ProfileCard user={user} />
         <PasswordCard />
+        <TwoFactorCard />
         <HTTPPasswordCard />
         <SSHKeysCard />
       </div>
@@ -181,6 +182,176 @@ function PasswordCard() {
             {busy ? t("password.updating") : t("password.change")}
           </Button>
         </form>
+      </CardContent>
+    </Card>
+  );
+}
+
+function TwoFactorCard() {
+  const { t } = useTranslation("settings");
+  const [state, setState] = useState<{ enabled: boolean; enrolled: boolean } | null>(null);
+  const [secret, setSecret] = useState("");
+  const [uri, setUri] = useState("");
+  const [code, setCode] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const [copied, setCopied] = useState(false);
+
+  const load = () => {
+    api
+      .get2FA()
+      .then(setState)
+      .catch(() => setState({ enabled: false, enrolled: false }));
+  };
+  useEffect(load, []);
+
+  const enroll = async () => {
+    setBusy(true);
+    setError("");
+    setCopied(false);
+    try {
+      const res = await api.enroll2FA();
+      setSecret(res.secret);
+      setUri(res.otpauth_uri);
+      setCode("");
+      setState({ enabled: false, enrolled: true });
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const enable = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setBusy(true);
+    setError("");
+    try {
+      await api.enable2FA(code);
+      setSecret("");
+      setUri("");
+      setCode("");
+      setState({ enabled: true, enrolled: true });
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const disable = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setBusy(true);
+    setError("");
+    try {
+      await api.disable2FA(code);
+      setCode("");
+      setState({ enabled: false, enrolled: false });
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(secret);
+      setCopied(true);
+    } catch {
+      /* clipboard unavailable */
+    }
+  };
+
+  const enabled = state?.enabled ?? false;
+  const enrolled = state?.enrolled ?? false;
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2 text-base">
+          <Smartphone className="size-4 text-muted-foreground" />
+          {t("twoFactor.title")}
+        </CardTitle>
+        <CardDescription>{t("twoFactor.description")}</CardDescription>
+      </CardHeader>
+      <CardContent className="flex flex-col gap-3">
+        <div className="flex items-center gap-2 text-sm">
+          <span className="text-muted-foreground">{t("twoFactor.status")}</span>
+          {state === null ? (
+            <span className="text-muted-foreground">{t("common:common.loading")}</span>
+          ) : enabled ? (
+            <Badge variant="success">{t("twoFactor.enabled")}</Badge>
+          ) : (
+            <Badge variant="muted">{t("twoFactor.disabled")}</Badge>
+          )}
+        </div>
+
+        {secret && (
+          <div className="flex flex-col gap-2 rounded-md border bg-muted/40 p-3">
+            <p className="text-xs text-muted-foreground">{t("twoFactor.scanHint")}</p>
+            <div className="flex items-center gap-2">
+              <code className="flex-1 break-all font-mono text-sm">{secret}</code>
+              <Button variant="outline" size="sm" onClick={copy}>
+                <Copy className="size-4" />
+                {copied ? t("common:action.copied") : t("common:action.copy")}
+              </Button>
+            </div>
+            <code className="break-all font-mono text-[10px] text-muted-foreground">{uri}</code>
+          </div>
+        )}
+
+        {!enabled && (
+          <form onSubmit={enable} className="flex flex-col gap-2">
+            {!enrolled ? (
+              <Button type="button" onClick={enroll} disabled={busy} className="self-start">
+                <Plus className="size-4" />
+                {t("twoFactor.enroll")}
+              </Button>
+            ) : (
+              <>
+                <Label htmlFor="2fa-code">{t("twoFactor.codeLabel")}</Label>
+                <div className="flex gap-2">
+                  <Input
+                    id="2fa-code"
+                    value={code}
+                    onChange={(e) => setCode(e.target.value.replace(/\D/g, "").slice(0, 6))}
+                    inputMode="numeric"
+                    placeholder="000000"
+                    className="max-w-40 font-mono"
+                    required
+                  />
+                  <Button type="submit" disabled={busy || code.length !== 6}>
+                    {t("twoFactor.enable")}
+                  </Button>
+                </div>
+              </>
+            )}
+          </form>
+        )}
+
+        {enabled && (
+          <form onSubmit={disable} className="flex flex-col gap-2">
+            <Label htmlFor="2fa-disable-code">{t("twoFactor.disableHint")}</Label>
+            <div className="flex gap-2">
+              <Input
+                id="2fa-disable-code"
+                value={code}
+                onChange={(e) => setCode(e.target.value.replace(/\D/g, "").slice(0, 6))}
+                inputMode="numeric"
+                placeholder="000000"
+                className="max-w-40 font-mono"
+                required
+              />
+              <Button type="submit" variant="outline" disabled={busy || code.length !== 6}>
+                <Trash2 className="size-4" />
+                {t("twoFactor.disable")}
+              </Button>
+            </div>
+          </form>
+        )}
+
+        {error && <p className="text-sm text-destructive">{error}</p>}
       </CardContent>
     </Card>
   );

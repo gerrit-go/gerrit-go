@@ -48,6 +48,8 @@ var enMessages = map[string]string{
 	"err.changeNotFound":     "change not found",
 	"err.projectNotFound":    "project not found",
 	"err.forbidden":          "permission denied: %s",
+	"err.totpRequired":       "enter your two-factor authentication code",
+	"err.totpInvalid":        "invalid two-factor authentication code",
 }
 
 // Simplified Chinese message templates.
@@ -93,4 +95,6 @@ var zhMessages = map[string]string{
 	"err.changeNotFound":     "变更不存在",
 	"err.projectNotFound":    "项目不存在",
 	"err.forbidden":          "权限不足：%s",
+	"err.totpRequired":       "请输入两步验证码",
+	"err.totpInvalid":        "两步验证码无效",
 }

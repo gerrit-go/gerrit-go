@@ -109,6 +109,17 @@ export default {
     destination: "Destination branch",
     busy: "Cherry-picking…",
   },
+  conflict: {
+    title: "Resolve rebase conflicts for change {{num}}",
+    description: "Edit each conflicted file to remove the markers, or pick a side, then continue the rebase.",
+    useOurs: "Use destination",
+    useTheirs: "Use change",
+    useBase: "Use base",
+    empty: "No conflicts detected.",
+    busy: "Resolving…",
+    submit: "Resolve & continue",
+    resolved: "Rebase conflicts resolved; new patch set created.",
+  },
   details: {
     title: "Details",
     commit: "Commit",

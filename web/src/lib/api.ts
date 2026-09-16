@@ -107,6 +107,14 @@ export interface FileDiff {
   del_count: number;
 }
 
+export interface ConflictFile {
+  path: string;
+  base: string;
+  ours: string;
+  theirs: string;
+  conflict: string;
+}
+
 export interface CommentInfo {
   id: number;
   patch_set: number;
@@ -257,9 +265,11 @@ export interface WatchedProjectInfo {
 
 class ApiError extends Error {
   status: number;
-  constructor(status: number, message: string) {
+  totpRequired?: boolean;
+  constructor(status: number, message: string, totpRequired = false) {
     super(message);
     this.status = status;
+    this.totpRequired = totpRequired;
   }
 }
 
@@ -285,18 +295,18 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     }
   }
   if (!res.ok) {
-    const msg =
-      (data as { error?: string } | null)?.error || `${res.status} ${res.statusText}`;
-    throw new ApiError(res.status, msg);
+    const d = data as { error?: string; totp_required?: boolean } | null;
+    const msg = d?.error || `${res.status} ${res.statusText}`;
+    throw new ApiError(res.status, msg, !!d?.totp_required);
   }
   return data as T;
 }
 
 export const api = {
-  login: (username: string, password: string) =>
+  login: (username: string, password: string, totp?: string) =>
     request<AccountInfo>("/login", {
       method: "POST",
-      body: JSON.stringify({ username, password }),
+      body: JSON.stringify({ username, password, ...(totp ? { totp } : {}) }),
     }),
   register: (body: { username: string; password: string; full_name?: string; email?: string }) =>
     request<AccountInfo>("/register", { method: "POST", body: JSON.stringify(body) }),
@@ -483,6 +493,13 @@ export const api = {
     request<{ status: string }>(`/changes/${num}/submit`, { method: "POST" }),
   rebase: (num: number | string) =>
     request<ChangeInfo>(`/changes/${num}/rebase`, { method: "POST" }),
+  rebaseConflicts: (num: number | string) =>
+    request<ConflictFile[]>(`/changes/${num}/rebase/conflicts`),
+  resolveRebase: (num: number | string, resolutions: Record<string, string>) =>
+    request<ChangeInfo>(`/changes/${num}/rebase/resolve`, {
+      method: "POST",
+      body: JSON.stringify({ resolutions }),
+    }),
   cherryPick: (num: number | string, destination: string) =>
     request<ChangeInfo>(`/changes/${num}/cherry_pick`, {
       method: "POST",
@@ -586,7 +603,7 @@ export const api = {
       body: JSON.stringify(id ? { id } : {}),
     }),
 
-  getConfig: () => request<{ auth: { oauth: boolean } }>("/config"),
+  getConfig: () => request<{ auth: { oauth: boolean; ldap?: boolean } }>("/config"),
   updateSelf: (body: { name?: string; email?: string }) =>
     request<AccountInfo>("/accounts/self", { method: "PUT", body: JSON.stringify(body) }),
   setPassword: (oldPassword: string, newPassword: string) =>
@@ -611,6 +628,22 @@ export const api = {
     }),
   deleteSSHKey: (id: number) =>
     request<null>(`/accounts/self/sshkeys/${id}`, { method: "DELETE" }),
+
+  get2FA: () => request<{ enabled: boolean; enrolled: boolean }>("/accounts/self/2fa"),
+  enroll2FA: () =>
+    request<{ secret: string; otpauth_uri: string }>("/accounts/self/2fa/enroll", {
+      method: "POST",
+    }),
+  enable2FA: (code: string) =>
+    request<null>("/accounts/self/2fa/enable", {
+      method: "POST",
+      body: JSON.stringify({ code }),
+    }),
+  disable2FA: (code: string) =>
+    request<null>("/accounts/self/2fa/disable", {
+      method: "POST",
+      body: JSON.stringify({ code }),
+    }),
 };
 
 export { ApiError };

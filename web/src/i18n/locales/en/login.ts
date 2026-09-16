@@ -3,6 +3,7 @@ export default {
   subtitle: "Sign in to review code, or create a new account.",
   username: "Username",
   password: "Password",
+  totpLabel: "Two-factor code",
   fullName: "Full name",
   email: "Email",
   signInTab: "Sign in",

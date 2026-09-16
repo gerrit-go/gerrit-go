@@ -135,6 +135,7 @@ func (s *Service) runGit(dir string, args ...string) (string, error) {
 		"GIT_AUTHOR_NAME=gerrit-go", "GIT_AUTHOR_EMAIL=gerrit-go@localhost",
 		"GIT_COMMITTER_NAME=gerrit-go", "GIT_COMMITTER_EMAIL=gerrit-go@localhost",
 		"GIT_TERMINAL_PROMPT=0",
+		"GIT_EDITOR=true", "GIT_SEQUENCE_EDITOR=true",
 	)
 	var out, errb bytes.Buffer
 	cmd.Stdout = &out
@@ -147,6 +148,27 @@ func (s *Service) runGit(dir string, args ...string) (string, error) {
 		return "", errors.New(msg)
 	}
 	return strings.TrimSpace(out.String()), nil
+}
+
+// runGitRaw is runGit without trailing-whitespace trimming, for commands whose
+// stdout is file content that must be preserved byte-for-byte.
+func (s *Service) runGitRaw(dir string, args ...string) (string, error) {
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	cmd.Env = append(os.Environ(),
+		"GIT_TERMINAL_PROMPT=0", "GIT_EDITOR=true", "GIT_SEQUENCE_EDITOR=true",
+	)
+	var out, errb bytes.Buffer
+	cmd.Stdout = &out
+	cmd.Stderr = &errb
+	if err := cmd.Run(); err != nil {
+		msg := strings.TrimSpace(errb.String())
+		if msg == "" {
+			msg = err.Error()
+		}
+		return "", errors.New(msg)
+	}
+	return out.String(), nil
 }
 
 // prepareWork clones the bare repository into a temporary work tree, fetches the

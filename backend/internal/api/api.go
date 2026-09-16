@@ -36,11 +36,23 @@ type Server struct {
 }
 
 func NewRouter(db *store.DB, authSvc *auth.Service, gitSvc *gitsvc.Service, notifier *notify.Notifier, staticDir string) http.Handler {
+	return NewServer(db, authSvc, gitSvc, notifier, staticDir).Handler()
+}
+
+// NewServer builds the API server. Callers that only need the HTTP handler can
+// use NewRouter; NewServer exposes the *Server so auxiliary listeners (e.g. the
+// git+ssh daemon) can share the same dependencies and permission checks.
+func NewServer(db *store.DB, authSvc *auth.Service, gitSvc *gitsvc.Service, notifier *notify.Notifier, staticDir string) *Server {
 	reg := metrics.New()
 	hook := webhook.New(db, 10*time.Second)
 	hook.SetCounters(reg.IncWebhookSent, reg.IncWebhookFail)
 	s := &Server{db: db, auth: authSvc, git: gitSvc, notify: notifier, hook: hook, metrics: reg, static: staticDir, mux: http.NewServeMux()}
 	s.routes()
+	return s
+}
+
+// Handler returns the HTTP handler (with i18n middleware) for the server.
+func (s *Server) Handler() http.Handler {
 	return i18n.Middleware(s)
 }
 
@@ -74,6 +86,10 @@ func (s *Server) routes() {
 	mux.HandleFunc("GET /accounts/self/notifications", s.requireAuth(s.handleListNotifications))
 	mux.HandleFunc("POST /accounts/self/notifications/read", s.requireAuth(s.handleMarkNotificationsRead))
 	mux.HandleFunc("GET /accounts/self/watched", s.requireAuth(s.handleListWatched))
+	mux.HandleFunc("GET /accounts/self/2fa", s.requireAuth(s.handleGet2FA))
+	mux.HandleFunc("POST /accounts/self/2fa/enroll", s.requireAuth(s.handleEnroll2FA))
+	mux.HandleFunc("POST /accounts/self/2fa/enable", s.requireAuth(s.handleEnable2FA))
+	mux.HandleFunc("POST /accounts/self/2fa/disable", s.requireAuth(s.handleDisable2FA))
 	mux.HandleFunc("GET /accounts/", s.requireAuth(s.handleListAccounts))
 	mux.HandleFunc("POST /accounts/", s.requireAuth(s.handleCreateAccount))
 
@@ -124,6 +140,8 @@ func (s *Server) routes() {
 	mux.HandleFunc("POST /changes/{num}/review", s.requireAuth(s.handleReview))
 	mux.HandleFunc("POST /changes/{num}/submit", s.requireAuth(s.handleSubmit))
 	mux.HandleFunc("POST /changes/{num}/rebase", s.requireAuth(s.handleRebase))
+	mux.HandleFunc("GET /changes/{num}/rebase/conflicts", s.requireAuth(s.handleRebaseConflicts))
+	mux.HandleFunc("POST /changes/{num}/rebase/resolve", s.requireAuth(s.handleResolveRebase))
 	mux.HandleFunc("POST /changes/{num}/cherry_pick", s.requireAuth(s.handleCherryPick))
 	mux.HandleFunc("POST /changes/{num}/revert", s.requireAuth(s.handleRevert))
 	mux.HandleFunc("POST /changes/{num}/abandon", s.requireAuth(s.handleAbandon))
@@ -272,6 +290,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Username string `json:"username"`
 		Password string `json:"password"`
+		TOTP     string `json:"totp"`
 	}
 	if err := decodeJSON(r, &req); err != nil {
 		writeErr(w, http.StatusBadRequest, i18n.T(lang, "err.invalidBody"))
@@ -281,6 +300,15 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeErr(w, http.StatusUnauthorized, i18n.T(lang, "err.invalidCredentials"))
 		return
+	}
+	if secret, enabled, _ := s.db.GetTOTP(acct.ID); enabled {
+		if req.TOTP == "" || !auth.ValidateTOTP(secret, req.TOTP) {
+			writeJSON(w, http.StatusUnauthorized, map[string]any{
+				"error":         i18n.T(lang, "err.totpRequired"),
+				"totp_required": true,
+			})
+			return
+		}
 	}
 	id, err := s.auth.CreateSession(acct.ID)
 	if err != nil {
@@ -1163,6 +1191,40 @@ func (s *Server) handleSubmit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	mergedCommit, submittedNums, err := s.submitChangeChain(acct, lang, c)
+	if err != nil {
+		var se *submitError
+		if errors.As(err, &se) {
+			if se.status == http.StatusForbidden {
+				s.forbid(w, r, PermSubmit)
+			} else {
+				writeErr(w, se.status, se.msg)
+			}
+			return
+		}
+		writeErr(w, http.StatusConflict, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"status": "MERGED", "commit": mergedCommit, "submitted": submittedNums,
+	})
+}
+
+// submitError carries an HTTP status for failures surfaced by submitChangeChain
+// so the HTTP handler can reproduce its original status codes while the SSH
+// command path simply reports the message.
+type submitError struct {
+	status int
+	msg    string
+}
+
+func (e *submitError) Error() string { return e.msg }
+
+// submitChangeChain submits c together with its open relation-chain ancestors
+// (and topic siblings when the project submits whole topics), parents first.
+// Every member is validated up front so a failure never leaves a partially
+// submitted chain. It returns the merged commit of c and all submitted numbers.
+func (s *Server) submitChangeChain(acct *store.Account, lang string, c *store.Change) (string, []int64, error) {
 	strategy, wholeTopic := "REBASE_IF_NECESSARY", false
 	if p, err := s.db.GetProject(c.Project); err == nil {
 		if p.SubmitType != "" {
@@ -1171,10 +1233,6 @@ func (s *Server) handleSubmit(w http.ResponseWriter, r *http.Request) {
 		wholeTopic = p.SubmitWholeTopic
 	}
 
-	// Build the submit batch: the change, its open relation-chain ancestors
-	// (Gerrit submits the whole chain, parents first), plus topic siblings and
-	// their ancestors when the project submits whole topics. Every member is
-	// validated up front so a failure never leaves a partially submitted chain.
 	seen := map[int64]bool{}
 	var batch []*store.Change
 	var add func(cs ...*store.Change)
@@ -1194,17 +1252,14 @@ func (s *Server) handleSubmit(w http.ResponseWriter, r *http.Request) {
 	}
 	for _, b := range batch {
 		if met, reason := s.submitRequirementsMet(b); !met {
-			writeErr(w, http.StatusConflict, fmt.Sprintf("change %d is not submittable: %s", b.Number, reason))
-			return
+			return "", nil, &submitError{http.StatusConflict,
+				fmt.Sprintf("change %d is not submittable: %s", b.Number, reason)}
 		}
 		if !s.can(acct, b.Project, branchRef(b.Branch), PermSubmit) {
-			s.forbid(w, r, PermSubmit)
-			return
+			return "", nil, &submitError{http.StatusForbidden, "submit not permitted"}
 		}
 	}
 
-	// Submit in relation-chain order: a change is eligible once it has no open
-	// ancestors left (parents merge first and then leave the open set).
 	pending := batch
 	mergedCommit := ""
 	var submittedNums []int64
@@ -1216,8 +1271,8 @@ func (s *Server) handleSubmit(w http.ResponseWriter, r *http.Request) {
 			}
 			sha, err := s.git.SubmitWithType(b.Number, strategy)
 			if err != nil {
-				writeErr(w, http.StatusConflict, fmt.Sprintf("submitting change %d failed: %v", b.Number, err))
-				return
+				return "", nil, &submitError{http.StatusConflict,
+					fmt.Sprintf("submitting change %d failed: %v", b.Number, err)}
 			}
 			s.db.AddChangeMessage(&store.ChangeMessage{
 				ChangeNum: b.Number, PatchSet: b.CurrentPS, Type: "submitted",
@@ -1241,14 +1296,11 @@ func (s *Server) handleSubmit(w http.ResponseWriter, r *http.Request) {
 		if !progress {
 			blocked := make([]*store.Change, len(pending))
 			copy(blocked, pending)
-			writeErr(w, http.StatusConflict,
-				"cannot determine submit order; changes depend on open ancestors: "+changeNums(blocked))
-			return
+			return "", nil, &submitError{http.StatusConflict,
+				"cannot determine submit order; changes depend on open ancestors: " + changeNums(blocked)}
 		}
 	}
-	writeJSON(w, http.StatusOK, map[string]any{
-		"status": "MERGED", "commit": mergedCommit, "submitted": submittedNums,
-	})
+	return mergedCommit, submittedNums, nil
 }
 
 func (s *Server) handleAbandon(w http.ResponseWriter, r *http.Request) {
@@ -1315,6 +1367,101 @@ func (s *Server) handleRebase(w http.ResponseWriter, r *http.Request) {
 	}
 	nc, err := s.git.Rebase(c.Number)
 	if err != nil {
+		if errors.Is(err, gitsvc.ErrRebaseConflict) {
+			writeJSON(w, http.StatusConflict, map[string]any{
+				"error": err.Error(), "conflict": true,
+			})
+			return
+		}
+		writeErr(w, http.StatusConflict, err.Error())
+		return
+	}
+	if err := s.recordPatchSet(c.Number, acct, nc,
+		i18n.T(lang, "msg.psRebased", nc.NewPatchSet, c.Branch)); err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, changeInfo(c))
+}
+
+// handleRebaseConflicts returns the three-way conflict content produced by a
+// trial rebase of the change onto its destination branch tip, so the web UI can
+// offer an interactive resolver. An empty list means the rebase is clean.
+func (s *Server) handleRebaseConflicts(w http.ResponseWriter, r *http.Request) {
+	acct := s.account(r)
+	num, ok := s.parseChangeNum(r)
+	if !ok {
+		writeErr(w, http.StatusBadRequest, "invalid change number")
+		return
+	}
+	c, err := s.db.GetChange(num)
+	if err != nil {
+		writeErr(w, http.StatusNotFound, "change not found")
+		return
+	}
+	if !s.ensureChangeRead(w, r, c) {
+		return
+	}
+	if c.Status != "NEW" {
+		writeErr(w, http.StatusConflict, "change is not open")
+		return
+	}
+	if !s.canUploadPatchSet(acct, c) {
+		s.forbid(w, r, PermPush)
+		return
+	}
+	files, err := s.git.RebaseConflicts(c.Number)
+	if err != nil {
+		writeErr(w, http.StatusConflict, err.Error())
+		return
+	}
+	if files == nil {
+		files = []gitsvc.ConflictFile{}
+	}
+	writeJSON(w, http.StatusOK, files)
+}
+
+// handleResolveRebase rebases the change applying the supplied per-path resolved
+// content and records the result as a new patch set.
+func (s *Server) handleResolveRebase(w http.ResponseWriter, r *http.Request) {
+	acct := s.account(r)
+	lang := i18n.LangFrom(r.Context())
+	num, ok := s.parseChangeNum(r)
+	if !ok {
+		writeErr(w, http.StatusBadRequest, "invalid change number")
+		return
+	}
+	c, err := s.db.GetChange(num)
+	if err != nil {
+		writeErr(w, http.StatusNotFound, "change not found")
+		return
+	}
+	if !s.ensureChangeRead(w, r, c) {
+		return
+	}
+	if c.Status != "NEW" {
+		writeErr(w, http.StatusConflict, "change is not open")
+		return
+	}
+	if !s.canUploadPatchSet(acct, c) {
+		s.forbid(w, r, PermPush)
+		return
+	}
+	var req struct {
+		Resolutions map[string]string `json:"resolutions"`
+	}
+	if err := decodeJSON(r, &req); err != nil || len(req.Resolutions) == 0 {
+		writeErr(w, http.StatusBadRequest, "resolutions are required")
+		return
+	}
+	nc, err := s.git.ResolveRebase(c.Number, req.Resolutions)
+	if err != nil {
+		if errors.Is(err, gitsvc.ErrRebaseConflict) {
+			writeJSON(w, http.StatusConflict, map[string]any{
+				"error": err.Error(), "conflict": true,
+			})
+			return
+		}
 		writeErr(w, http.StatusConflict, err.Error())
 		return
 	}

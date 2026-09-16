@@ -17,6 +17,7 @@ import (
 
 func main() {
 	addr := flag.String("addr", ":8080", "listen address")
+	sshAddr := flag.String("ssh-addr", ":29418", "git+ssh listen address (empty disables SSH)")
 	dataDir := flag.String("data", "data", "data directory (db + git repos)")
 	staticDir := flag.String("static", "", "directory of built frontend assets (optional)")
 	webURL := flag.String("web-url", "", "canonical web URL used in notification emails (optional)")
@@ -33,6 +34,15 @@ func main() {
 	oauthRedirectURL := flag.String("oauth-redirect-url", "", "OAuth2/OIDC redirect URL (default: <web-url>/oauth/callback)")
 	oauthScopes := flag.String("oauth-scopes", "openid email profile", "OAuth2/OIDC scopes")
 	oauthDomain := flag.String("oauth-domain", "", "restrict SSO login to this email domain (optional)")
+	ldapURL := flag.String("ldap-url", "", "LDAP/AD URL, e.g. ldap://host:389 or ldaps://host:636 (empty disables LDAP)")
+	ldapBindDN := flag.String("ldap-bind-dn", "", "service account DN for the user search (empty => anonymous search)")
+	ldapBindPass := flag.String("ldap-bind-pass", "", "service account password")
+	ldapBaseDN := flag.String("ldap-base-dn", "", "search base DN, e.g. ou=people,dc=example,dc=com")
+	ldapUserFilter := flag.String("ldap-user-filter", "(uid=%s)", "user search filter; %s is replaced by the username")
+	ldapAttr := flag.String("ldap-attr", "uid", "username attribute (AD: sAMAccountName)")
+	ldapEmailAttr := flag.String("ldap-email-attr", "mail", "email attribute")
+	ldapNameAttr := flag.String("ldap-name-attr", "cn", "display-name attribute")
+	ldapInsecure := flag.Bool("ldap-insecure", false, "skip LDAP TLS certificate verification (ldaps)")
 	flag.Parse()
 
 	if err := os.MkdirAll(filepath.Join(*dataDir, "git"), 0o755); err != nil {
@@ -68,6 +78,21 @@ func main() {
 		log.Printf("OAuth2/OIDC single sign-on enabled (redirect: %s)", redirectURL)
 	}
 
+	authSvc.ConfigureLDAP(auth.LDAPConfig{
+		URL:        *ldapURL,
+		BindDN:     *ldapBindDN,
+		BindPass:   *ldapBindPass,
+		BaseDN:     *ldapBaseDN,
+		UserFilter: *ldapUserFilter,
+		Attr:       *ldapAttr,
+		EmailAttr:  *ldapEmailAttr,
+		NameAttr:   *ldapNameAttr,
+		Insecure:   *ldapInsecure,
+	})
+	if authSvc.LDAPEnabled() {
+		log.Printf("LDAP/AD authentication enabled (url: %s, base: %s)", *ldapURL, *ldapBaseDN)
+	}
+
 	gitSvc := gitsvc.New(filepath.Join(*dataDir, "git"), db)
 	notifier := notify.New(db, notify.SMTPConfig{
 		Host:     *smtpHost,
@@ -79,7 +104,16 @@ func main() {
 	if *smtpHost == "" {
 		log.Printf("email notifications disabled (set -smtp-host to enable); in-app notifications active")
 	}
-	handler := api.NewRouter(db, authSvc, gitSvc, notifier, *staticDir)
+	srv := api.NewServer(db, authSvc, gitSvc, notifier, *staticDir)
+	handler := srv.Handler()
+
+	if *sshAddr != "" {
+		go func() {
+			if err := srv.StartSSH(*sshAddr); err != nil {
+				log.Printf("ssh listener stopped: %v", err)
+			}
+		}()
+	}
 
 	log.Printf("gerrit-go listening on %s (data dir: %s)", *addr, *dataDir)
 	if err := http.ListenAndServe(*addr, handler); err != nil {

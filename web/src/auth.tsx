@@ -4,7 +4,7 @@ import { api, type AccountInfo } from "@/lib/api";
 interface AuthState {
   user: AccountInfo | null;
   loading: boolean;
-  signIn: (username: string, password: string) => Promise<void>;
+  signIn: (username: string, password: string, totp?: string) => Promise<void>;
   signUp: (body: {
     username: string;
     password: string;
@@ -29,8 +29,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       .finally(() => setLoading(false));
   }, []);
 
-  const signIn = async (username: string, password: string) => {
-    const acct = await api.login(username, password);
+  const signIn = async (username: string, password: string, totp?: string) => {
+    const acct = await api.login(username, password, totp);
     setUser(acct);
   };
 

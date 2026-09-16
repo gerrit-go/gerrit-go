@@ -89,67 +89,20 @@ func (s *Service) amendMessage(work, msg string) error {
 }
 
 // Rebase replays a change's commits onto the current tip of its destination
-// branch, pushing the result as the next patch set.
+// branch, pushing the result as the next patch set. On conflict it aborts and
+// returns ErrRebaseConflict; callers wanting interactive resolution should use
+// RebaseConflicts + ResolveRebase instead.
 func (s *Service) Rebase(changeNumber int64) (NewCommit, error) {
-	change, err := s.db.GetChange(changeNumber)
-	if err != nil {
-		return NewCommit{}, err
-	}
-	if change.Status != "NEW" {
-		return NewCommit{}, ErrNotSubmittable
-	}
-	ps, err := s.db.GetPatchSet(change.Number, change.CurrentPS)
-	if err != nil {
-		return NewCommit{}, err
-	}
-	tip := s.branchTip(change.Project, change.Branch)
-	if tip.IsZero() {
-		return NewCommit{}, errors.New("destination branch does not exist")
-	}
-	changeSHA := plumbing.NewHash(ps.CommitSHA)
-	repo, err := s.OpenRepo(change.Project)
-	if err != nil {
-		return NewCommit{}, err
-	}
-	if tip == changeSHA {
-		return NewCommit{}, errors.New("change is already up to date")
-	}
-	if ok, _ := isAncestor(repo, tip, changeSHA); ok {
-		return NewCommit{}, errors.New("change is already up to date")
-	}
-
-	work, cleanup, err := s.cloneWork(change.Project)
+	change, work, cleanup, conflicted, err := s.beginRebase(changeNumber)
 	if err != nil {
 		return NewCommit{}, err
 	}
 	defer cleanup()
-	if _, err := s.runGit(work, "fetch", "--quiet", "origin", s.changeRef(change.Number, ps.Number)); err != nil {
-		return NewCommit{}, err
-	}
-	if _, err := s.runGit(work, "checkout", "--quiet", "-B", change.Branch, tip.String()); err != nil {
-		return NewCommit{}, err
-	}
-	if _, err := s.runGit(work, "checkout", "--quiet", "-b", "gerrit-rebase", changeSHA.String()); err != nil {
-		return NewCommit{}, err
-	}
-	if _, err := s.runGit(work, "rebase", change.Branch); err != nil {
+	if conflicted {
 		s.runGit(work, "rebase", "--abort")
 		return NewCommit{}, ErrRebaseConflict
 	}
-	sha, err := s.runGit(work, "rev-parse", "HEAD")
-	if err != nil {
-		return NewCommit{}, err
-	}
-	nc, err := s.readCommit(work, sha)
-	if err != nil {
-		return NewCommit{}, err
-	}
-	newPS := change.CurrentPS + 1
-	if _, err := s.runGit(work, "push", "--quiet", "origin", sha+":"+s.changeRef(change.Number, newPS)); err != nil {
-		return NewCommit{}, err
-	}
-	nc.NewPatchSet = newPS
-	return nc, nil
+	return s.finishRebase(change, work)
 }
 
 // CherryPick applies a change's current commit onto targetBranch as a new commit

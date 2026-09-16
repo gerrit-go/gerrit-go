@@ -3,6 +3,7 @@ export default {
   subtitle: "登录以评审代码，或创建一个新账号。",
   username: "用户名",
   password: "密码",
+  totpLabel: "两步验证码",
   fullName: "姓名",
   email: "邮箱",
   signInTab: "登录",

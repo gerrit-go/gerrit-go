@@ -1,0 +1,20 @@
+services:
+  gerrit-go:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: gerrit-go:latest
+    container_name: gerrit-go
+    restart: unless-stopped
+    ports:
+      # Host port is configurable; override with GERRIT_GO_PORT in a .env file.
+      - "${GERRIT_GO_PORT:-8080}:8080"
+      # git+ssh (git clone/push over SSH, gerrit CLI). Override with GERRIT_GO_SSH_PORT.
+      - "${GERRIT_GO_SSH_PORT:-29418}:29418"
+    volumes:
+      # SQLite DB + bare git repos live here and survive container rebuilds.
+      - ./data:/data
+    # Optional: expose SMTP / OAuth / canonical web URL by extending command, e.g.
+    # command: ["-addr", ":8080", "-data", "/data", "-static", "/app/dist",
+    #           "-web-url", "https://code.example.com",
+    #           "-smtp-host", "smtp.example.com", "-smtp-from", "gerrit@example.com"]

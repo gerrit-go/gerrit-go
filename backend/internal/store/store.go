@@ -386,6 +386,8 @@ CREATE INDEX IF NOT EXISTS idx_audit_id ON audit_log(id);`
 	for _, col := range []struct{ name, def string }{
 		{"http_password_hash", "http_password_hash TEXT NOT NULL DEFAULT ''"},
 		{"external_id", "external_id TEXT NOT NULL DEFAULT ''"},
+		{"totp_secret", "totp_secret TEXT NOT NULL DEFAULT ''"},
+		{"totp_enabled", "totp_enabled INTEGER NOT NULL DEFAULT 0"},
 	} {
 		if err := addColumnIfMissing(db, "accounts", col.name, col.def); err != nil {
 			return err

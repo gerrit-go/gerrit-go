@@ -3,7 +3,7 @@ import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { GitPullRequestArrow } from "lucide-react";
 import { useAuth } from "@/auth";
-import { api } from "@/lib/api";
+import { api, ApiError } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -30,6 +30,8 @@ export default function LoginPage() {
 
   const [loginUser, setLoginUser] = useState("");
   const [loginPass, setLoginPass] = useState("");
+  const [totpCode, setTotpCode] = useState("");
+  const [totpNeeded, setTotpNeeded] = useState(false);
   const [regUser, setRegUser] = useState("");
   const [regPass, setRegPass] = useState("");
   const [regName, setRegName] = useState("");
@@ -40,10 +42,16 @@ export default function LoginPage() {
     setBusy(true);
     setError("");
     try {
-      await signIn(loginUser, loginPass);
+      await signIn(loginUser, loginPass, totpNeeded ? totpCode : undefined);
       navigate("/");
     } catch (err) {
-      setError((err as Error).message);
+      if (err instanceof ApiError && err.totpRequired) {
+        setTotpNeeded(true);
+        setTotpCode("");
+        setError("");
+      } else {
+        setError((err as Error).message);
+      }
     } finally {
       setBusy(false);
     }
@@ -110,6 +118,21 @@ export default function LoginPage() {
                     required
                   />
                 </div>
+                {totpNeeded && (
+                  <div className="flex flex-col gap-2">
+                    <Label htmlFor="totp">{t("totpLabel")}</Label>
+                    <Input
+                      id="totp"
+                      value={totpCode}
+                      onChange={(e) => setTotpCode(e.target.value.replace(/\D/g, "").slice(0, 6))}
+                      inputMode="numeric"
+                      autoComplete="one-time-code"
+                      placeholder="000000"
+                      autoFocus
+                      required
+                    />
+                  </div>
+                )}
                 {error && <p className="text-sm text-destructive">{error}</p>}
                 <Button type="submit" disabled={busy} className="w-full">
                   {busy ? t("signingIn") : t("signInTab")}

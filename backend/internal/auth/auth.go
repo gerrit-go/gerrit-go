@@ -20,6 +20,7 @@ var ErrUnauthorized = errors.New("unauthorized")
 type Service struct {
 	db    *store.DB
 	oauth OAuthConfig
+	ldap  LDAPConfig
 }
 
 func New(db *store.DB) *Service { return &Service{db: db} }
@@ -84,14 +85,18 @@ func (s *Service) Register(username, password, fullName, email string) (*store.A
 }
 
 func (s *Service) Authenticate(username, password string) (*store.Account, error) {
-	a, err := s.db.GetAccountByUsername(username)
-	if err != nil {
+	if username == "" || password == "" {
 		return nil, ErrUnauthorized
 	}
-	if bcrypt.CompareHashAndPassword([]byte(a.PasswordHash), []byte(password)) != nil {
-		return nil, ErrUnauthorized
+	if a, err := s.db.GetAccountByUsername(username); err == nil {
+		if bcrypt.CompareHashAndPassword([]byte(a.PasswordHash), []byte(password)) == nil {
+			return a, nil
+		}
 	}
-	return a, nil
+	if s.ldap.Enabled() {
+		return s.authenticateLDAP(username, password)
+	}
+	return nil, ErrUnauthorized
 }
 
 // AuthenticateHTTP validates credentials presented over HTTP basic auth (git
@@ -99,18 +104,20 @@ func (s *Service) Authenticate(username, password string) (*store.Account, error
 // is set, and otherwise falls back to the login password.
 func (s *Service) AuthenticateHTTP(username, password string) (*store.Account, error) {
 	a, err := s.db.GetAccountByUsername(username)
-	if err != nil {
-		return nil, ErrUnauthorized
-	}
-	if hash, _ := s.db.GetHTTPPasswordHash(a.ID); hash != "" {
-		if bcrypt.CompareHashAndPassword([]byte(hash), []byte(password)) == nil {
+	if err == nil {
+		if hash, _ := s.db.GetHTTPPasswordHash(a.ID); hash != "" {
+			if bcrypt.CompareHashAndPassword([]byte(hash), []byte(password)) == nil {
+				return a, nil
+			}
+		}
+		if bcrypt.CompareHashAndPassword([]byte(a.PasswordHash), []byte(password)) == nil {
 			return a, nil
 		}
 	}
-	if bcrypt.CompareHashAndPassword([]byte(a.PasswordHash), []byte(password)) != nil {
-		return nil, ErrUnauthorized
+	if s.ldap.Enabled() {
+		return s.authenticateLDAP(username, password)
 	}
-	return a, nil
+	return nil, ErrUnauthorized
 }
 
 // GenerateHTTPPassword creates a fresh random HTTP password for an account,

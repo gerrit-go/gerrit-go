@@ -42,6 +42,7 @@ import {
   type CheckRun,
   type CommentDraftInfo,
   type CommentInfo,
+  type ConflictFile,
   type DiffHunk,
   type DiffLine,
   type FileDiff,
@@ -88,6 +89,7 @@ export default function ChangeDetailPage() {
   const [error, setError] = useState("");
   const [actionMsg, setActionMsg] = useState("");
   const [cherryOpen, setCherryOpen] = useState(false);
+  const [conflictOpen, setConflictOpen] = useState(false);
 
   const load = useCallback(async () => {
     if (!num) return;
@@ -326,9 +328,26 @@ export default function ChangeDetailPage() {
               <DropdownMenuContent align="start">
                 {change.status === "NEW" && (
                   <DropdownMenuItem
-                    onSelect={() =>
-                      runAction(() => api.rebase(change._number), t("actions.rebased"))
-                    }
+                    onSelect={async () => {
+                      setActionMsg("");
+                      setError("");
+                      try {
+                        await api.rebase(change._number);
+                        setActionMsg(t("actions.rebased"));
+                        await load();
+                      } catch (err) {
+                        try {
+                          const conflicts = await api.rebaseConflicts(change._number);
+                          if (conflicts && conflicts.length > 0) {
+                            setConflictOpen(true);
+                            return;
+                          }
+                        } catch {
+                          /* fall through to the original error */
+                        }
+                        setError((err as Error).message);
+                      }
+                    }}
                   >
                     <GitBranch className="size-4" />
                     {t("actions.rebase")}
@@ -365,6 +384,16 @@ export default function ChangeDetailPage() {
             project={change.project}
             defaultBranch={change.branch}
             onCreated={(newNum) => navigate(`/c/${newNum}`)}
+            onError={setError}
+          />
+          <ConflictDialog
+            open={conflictOpen}
+            onOpenChange={setConflictOpen}
+            num={change._number}
+            onResolved={async () => {
+              setActionMsg(t("conflict.resolved"));
+              await load();
+            }}
             onError={setError}
           />
           <div className="ml-auto flex items-center gap-2">
@@ -1429,6 +1458,148 @@ function CherryPickDialog({
           </Button>
           <Button onClick={submit} disabled={busy || !dest.trim()}>
             {busy ? t("cherryPick.busy") : t("actions.cherryPick")}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function ConflictDialog({
+  open,
+  onOpenChange,
+  num,
+  onResolved,
+  onError,
+}: {
+  open: boolean;
+  onOpenChange: (v: boolean) => void;
+  num: number;
+  onResolved: () => void | Promise<void>;
+  onError: (msg: string) => void;
+}) {
+  const { t } = useTranslation("changeDetail");
+  const [conflicts, setConflicts] = useState<ConflictFile[]>([]);
+  const [resolutions, setResolutions] = useState<Record<string, string>>({});
+  const [loading, setLoading] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+
+  useEffect(() => {
+    if (!open) return;
+    setLoading(true);
+    setErr("");
+    setResolutions({});
+    api
+      .rebaseConflicts(num)
+      .then((files) => {
+        const list = files ?? [];
+        setConflicts(list);
+        setResolutions(
+          Object.fromEntries(list.map((f) => [f.path, f.conflict])),
+        );
+      })
+      .catch((e) => {
+        const msg = (e as Error).message;
+        setErr(msg);
+        onError(msg);
+      })
+      .finally(() => setLoading(false));
+  }, [open, num, onError]);
+
+  const setRes = (path: string, content: string) =>
+    setResolutions((r) => ({ ...r, [path]: content }));
+
+  const resolvedAll =
+    conflicts.length > 0 &&
+    conflicts.every(
+      (f) => !(resolutions[f.path] ?? "").includes("<<<<<<<"),
+    );
+
+  const submit = async () => {
+    setBusy(true);
+    setErr("");
+    try {
+      await api.resolveRebase(num, resolutions);
+      onOpenChange(false);
+      await onResolved();
+    } catch (e) {
+      const msg = (e as Error).message;
+      setErr(msg);
+      onError(msg);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="sm:max-w-3xl">
+        <DialogHeader>
+          <DialogTitle>{t("conflict.title", { num })}</DialogTitle>
+          <DialogDescription>{t("conflict.description")}</DialogDescription>
+        </DialogHeader>
+        {loading ? (
+          <div className="space-y-2">
+            <Skeleton className="h-24 w-full" />
+            <Skeleton className="h-24 w-full" />
+          </div>
+        ) : (
+          <div className="max-h-[60vh] space-y-4 overflow-y-auto pr-1">
+            {conflicts.map((f) => (
+              <div key={f.path} className="space-y-2">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="font-mono text-sm font-medium">{f.path}</span>
+                  <div className="ml-auto flex gap-1.5">
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => setRes(f.path, f.ours)}
+                      disabled={f.ours === ""}
+                    >
+                      {t("conflict.useOurs")}
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => setRes(f.path, f.theirs)}
+                      disabled={f.theirs === ""}
+                    >
+                      {t("conflict.useTheirs")}
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => setRes(f.path, f.base)}
+                      disabled={f.base === ""}
+                    >
+                      {t("conflict.useBase")}
+                    </Button>
+                  </div>
+                </div>
+                <Textarea
+                  className="font-mono text-xs"
+                  rows={10}
+                  value={resolutions[f.path] ?? ""}
+                  onChange={(e) => setRes(f.path, e.target.value)}
+                />
+              </div>
+            ))}
+            {conflicts.length === 0 && (
+              <p className="text-sm text-muted-foreground">{t("conflict.empty")}</p>
+            )}
+          </div>
+        )}
+        {err && <p className="text-sm text-destructive">{err}</p>}
+        <DialogFooter>
+          <Button variant="ghost" onClick={() => onOpenChange(false)}>
+            {t("common:action.cancel")}
+          </Button>
+          <Button
+            onClick={submit}
+            disabled={busy || loading || conflicts.length === 0 || !resolvedAll}
+          >
+            {busy ? t("conflict.busy") : t("conflict.submit")}
           </Button>
         </DialogFooter>
       </DialogContent>

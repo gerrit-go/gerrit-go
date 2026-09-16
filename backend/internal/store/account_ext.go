@@ -119,3 +119,50 @@ func (d *DB) DeleteSSHKey(accountID, id int64) error {
 	_, err := d.db.Exec(`DELETE FROM ssh_keys WHERE account_id=? AND id=?`, accountID, id)
 	return err
 }
+
+// FindAccountBySSHPublicKey resolves an account from a normalized public key
+// ("algo base64"), used to authenticate git+ssh sessions.
+func (d *DB) FindAccountBySSHPublicKey(publicKey string) (*Account, error) {
+	if publicKey == "" {
+		return nil, sql.ErrNoRows
+	}
+	a := &Account{}
+	var admin int
+	var created string
+	err := d.db.QueryRow(
+		`SELECT a.id, a.username, a.password_hash, a.full_name, a.email, a.admin, a.created
+		   FROM accounts a JOIN ssh_keys k ON k.account_id = a.id
+		  WHERE k.public_key=? LIMIT 1`,
+		publicKey).
+		Scan(&a.ID, &a.Username, &a.PasswordHash, &a.FullName, &a.Email, &admin, &created)
+	if err != nil {
+		return nil, err
+	}
+	a.Admin = admin == 1
+	a.Created = parseTime(created)
+	return a, nil
+}
+
+// GetTOTP returns an account's TOTP secret and whether 2FA is currently
+// enforced. A non-empty secret with enabled=false represents a pending
+// enrollment that has not yet been confirmed.
+func (d *DB) GetTOTP(id int64) (secret string, enabled bool, err error) {
+	var en int
+	err = d.db.QueryRow(`SELECT totp_secret, totp_enabled FROM accounts WHERE id=?`, id).Scan(&secret, &en)
+	if err == sql.ErrNoRows {
+		return "", false, nil
+	}
+	return secret, en == 1, err
+}
+
+// SetTOTPSecret stores (or clears, when secret=="") an account's TOTP secret.
+func (d *DB) SetTOTPSecret(id int64, secret string) error {
+	_, err := d.db.Exec(`UPDATE accounts SET totp_secret=? WHERE id=?`, secret, id)
+	return err
+}
+
+// SetTOTPEnabled toggles whether 2FA is enforced at login for an account.
+func (d *DB) SetTOTPEnabled(id int64, enabled bool) error {
+	_, err := d.db.Exec(`UPDATE accounts SET totp_enabled=? WHERE id=?`, b2i(enabled), id)
+	return err
+}
