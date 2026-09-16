@@ -155,6 +155,12 @@ func (s *Server) routes() {
 	mux.HandleFunc("POST /changes/{num}/rebase", s.requireAuth(s.handleRebase))
 	mux.HandleFunc("GET /changes/{num}/rebase/conflicts", s.requireAuth(s.handleRebaseConflicts))
 	mux.HandleFunc("POST /changes/{num}/rebase/resolve", s.requireAuth(s.handleResolveRebase))
+	mux.HandleFunc("GET /changes/{num}/edit", s.requireAuth(s.handleGetEdit))
+	mux.HandleFunc("PUT /changes/{num}/edit", s.requireAuth(s.handleCreateEdit))
+	mux.HandleFunc("DELETE /changes/{num}/edit", s.requireAuth(s.handleDeleteEdit))
+	mux.HandleFunc("PUT /changes/{num}/edit/file", s.requireAuth(s.handlePutEditFile))
+	mux.HandleFunc("DELETE /changes/{num}/edit/file", s.requireAuth(s.handleDeleteEditFile))
+	mux.HandleFunc("POST /changes/{num}/edit:publish", s.requireAuth(s.handlePublishEdit))
 	mux.HandleFunc("POST /changes/{num}/cherry_pick", s.requireAuth(s.handleCherryPick))
 	mux.HandleFunc("POST /changes/{num}/revert", s.requireAuth(s.handleRevert))
 	mux.HandleFunc("POST /changes/{num}/abandon", s.requireAuth(s.handleAbandon))
@@ -590,6 +596,7 @@ func (s *Server) handleListProjects(w http.ResponseWriter, r *http.Request) {
 			"name":        p.Name,
 			"description": p.Description,
 			"state":       p.State,
+			"parent":      p.Parent,
 		}
 	}
 	writeJSON(w, http.StatusOK, out)
@@ -604,12 +611,17 @@ func (s *Server) handleCreateProject(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Name        string `json:"name"`
 		Description string `json:"description"`
+		Parent      string `json:"parent"`
 	}
 	if err := decodeJSON(r, &req); err != nil || req.Name == "" {
 		writeErr(w, http.StatusBadRequest, "name is required")
 		return
 	}
 	req.Name = strings.TrimSuffix(req.Name, ".git")
+	if err := s.validateParent(req.Name, req.Parent); err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	if err := s.git.CreateProject(req.Name, req.Description); err != nil {
 		code := http.StatusInternalServerError
 		if errors.Is(err, gitsvc.ErrProjectExists) {
@@ -618,8 +630,44 @@ func (s *Server) handleCreateProject(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, code, err.Error())
 		return
 	}
+	if req.Parent != "" {
+		if err := s.db.SetProjectParent(req.Name, req.Parent); err != nil {
+			writeErr(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+	}
 	s.seedProjectAccess(req.Name, acct)
-	writeJSON(w, http.StatusCreated, map[string]any{"name": req.Name, "description": req.Description})
+	writeJSON(w, http.StatusCreated, map[string]any{"name": req.Name, "description": req.Description, "parent": req.Parent})
+}
+
+// validateParent checks that parent is a valid parent for the project named
+// name: empty (global-only) is always allowed; otherwise it must name an
+// existing project, must not be the project itself or the '*' sentinel, and
+// must not already have name among its own ancestors (which would create a
+// cycle).
+func (s *Server) validateParent(name, parent string) error {
+	if parent == "" {
+		return nil
+	}
+	if parent == name {
+		return errors.New("a project cannot be its own parent")
+	}
+	if parent == "*" {
+		return errors.New("'*' is reserved; use an empty parent for global defaults")
+	}
+	if _, err := s.db.GetProject(parent); err != nil {
+		return errors.New("parent project not found")
+	}
+	chain, err := s.db.ProjectParentChain(parent)
+	if err != nil {
+		return err
+	}
+	for _, ancestor := range chain {
+		if ancestor == name {
+			return errors.New("parent would create a cycle")
+		}
+	}
+	return nil
 }
 
 // seedProjectAccess creates the per-project "<name> Owners" group, adds the
@@ -670,6 +718,7 @@ func (s *Server) handleGetProject(w http.ResponseWriter, r *http.Request) {
 		"name":                p.Name,
 		"description":         p.Description,
 		"state":               p.State,
+		"parent":              p.Parent,
 		"submit_type":         p.SubmitType,
 		"submit_whole_topic":  p.SubmitWholeTopic,
 		"submit_requirements": reqs,

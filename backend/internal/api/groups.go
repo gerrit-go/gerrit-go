@@ -204,9 +204,33 @@ func (s *Server) handleGetAccess(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	p, _ := s.db.GetProject(name)
+	chain, _ := s.db.ProjectParentChain(name)
+	all, err := s.db.ListAccessRulesInherited(name)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	var inherited, global []*store.AccessRule
+	for _, rule := range all {
+		switch {
+		case rule.Project == "*":
+			global = append(global, rule)
+		case rule.Project != name:
+			inherited = append(inherited, rule)
+		}
+	}
+	parent := ""
+	if p != nil {
+		parent = p.Parent
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"local":    rules,
-		"can_edit": s.canEditAccess(s.optionalAccount(r), name),
+		"local":     rules,
+		"inherited": inherited,
+		"global":    global,
+		"parent":    parent,
+		"chain":     chain,
+		"can_edit":  s.canEditAccess(s.optionalAccount(r), name),
 	})
 }
 
@@ -272,10 +296,23 @@ func (s *Server) handleSetProjectConfig(w http.ResponseWriter, r *http.Request) 
 		SubmitType         *string                     `json:"submit_type"`
 		SubmitWholeTopic   *bool                       `json:"submit_whole_topic"`
 		SubmitRequirements *[]*store.SubmitRequirement `json:"submit_requirements"`
+		Parent             *string                     `json:"parent"`
 	}
 	if err := decodeJSON(r, &req); err != nil {
 		writeErr(w, http.StatusBadRequest, "invalid request body")
 		return
+	}
+	parent := p.Parent
+	if req.Parent != nil {
+		if err := s.validateParent(name, *req.Parent); err != nil {
+			writeErr(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		if err := s.db.SetProjectParent(name, *req.Parent); err != nil {
+			writeErr(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		parent = *req.Parent
 	}
 	submitType := p.SubmitType
 	if req.SubmitType != nil {
@@ -308,5 +345,6 @@ func (s *Server) handleSetProjectConfig(w http.ResponseWriter, r *http.Request) 
 		"submit_type":         submitType,
 		"submit_whole_topic":  wholeTopic,
 		"submit_requirements": updated,
+		"parent":              parent,
 	})
 }

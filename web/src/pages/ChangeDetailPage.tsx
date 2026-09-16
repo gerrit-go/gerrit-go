@@ -45,6 +45,7 @@ import {
   type ConflictFile,
   type DiffHunk,
   type DiffLine,
+  type EditInfo,
   type FileDiff,
 } from "@/lib/api";
 import { useNavigate } from "react-router-dom";
@@ -90,6 +91,9 @@ export default function ChangeDetailPage() {
   const [actionMsg, setActionMsg] = useState("");
   const [cherryOpen, setCherryOpen] = useState(false);
   const [conflictOpen, setConflictOpen] = useState(false);
+  const [edit, setEdit] = useState<EditInfo | null>(null);
+  const [editFilePath, setEditFilePath] = useState<string | null>(null);
+  const [editFileContent, setEditFileContent] = useState("");
 
   const load = useCallback(async () => {
     if (!num) return;
@@ -105,6 +109,10 @@ export default function ChangeDetailPage() {
       if (user) {
         const dr = await api.listDrafts(num).catch(() => [] as CommentDraftInfo[]);
         setDrafts(dr ?? []);
+        const ed = await api.getEdit(num).catch(() => null);
+        setEdit(ed);
+      } else {
+        setEdit(null);
       }
     } catch (err) {
       setError((err as Error).message);
@@ -357,6 +365,61 @@ export default function ChangeDetailPage() {
                   <GitFork className="size-4" />
                   {t("actions.cherryPick")}
                 </DropdownMenuItem>
+                {change.status === "NEW" && !edit && (
+                  <DropdownMenuItem
+                    onSelect={async () => {
+                      setActionMsg("");
+                      setError("");
+                      try {
+                        const ed = await api.createEdit(change._number);
+                        setEdit(ed);
+                      } catch (err) {
+                        setError((err as Error).message);
+                      }
+                    }}
+                  >
+                    <Pencil className="size-4" />
+                    {t("actions.edit")}
+                  </DropdownMenuItem>
+                )}
+                {change.status === "NEW" && edit && (
+                  <>
+                    <DropdownMenuItem
+                      disabled={edit.stale}
+                      onSelect={async () => {
+                        setActionMsg("");
+                        setError("");
+                        try {
+                          await api.publishEdit(change._number);
+                          setEdit(null);
+                          setActionMsg(t("actions.editPublished"));
+                          await load();
+                        } catch (err) {
+                          setError((err as Error).message);
+                        }
+                      }}
+                    >
+                      <Send className="size-4" />
+                      {t("actions.publishEdit")}
+                    </DropdownMenuItem>
+                    <DropdownMenuItem
+                      onSelect={async () => {
+                        setActionMsg("");
+                        setError("");
+                        try {
+                          await api.deleteEdit(change._number);
+                          setEdit(null);
+                          setActionMsg(t("actions.editDeleted"));
+                        } catch (err) {
+                          setError((err as Error).message);
+                        }
+                      }}
+                    >
+                      <Trash2 className="size-4" />
+                      {t("actions.deleteEdit")}
+                    </DropdownMenuItem>
+                  </>
+                )}
                 {change.status === "MERGED" && (
                   <DropdownMenuItem
                     onSelect={async () => {
@@ -393,6 +456,17 @@ export default function ChangeDetailPage() {
             onResolved={async () => {
               setActionMsg(t("conflict.resolved"));
               await load();
+            }}
+            onError={setError}
+          />
+          <ChangeEditDialog
+            path={editFilePath}
+            initial={editFileContent}
+            onClose={() => setEditFilePath(null)}
+            onSave={async (path, content) => {
+              const ed = await api.putEditFile(change._number, path, content);
+              setEdit(ed);
+              setEditFilePath(null);
             }}
             onError={setError}
           />
@@ -480,7 +554,27 @@ export default function ChangeDetailPage() {
                             {t("files.renamedFrom", { path: f.old_path })}
                           </span>
                         )}
-                        <span className="ml-auto flex gap-2 font-mono text-xs">
+                        <span className="ml-auto flex items-center gap-2 font-mono text-xs">
+                          {edit && change.status === "NEW" && (
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              className="h-6 px-1.5"
+                              title={t("actions.editFile")}
+                              onClick={async () => {
+                                setError("");
+                                try {
+                                  const content = await api.revisionFileContent(change._number, "current", f.path);
+                                  setEditFileContent(content);
+                                  setEditFilePath(f.path);
+                                } catch (err) {
+                                  setError((err as Error).message);
+                                }
+                              }}
+                            >
+                              <Pencil className="size-3.5" />
+                            </Button>
+                          )}
                           <span className="text-emerald-600">+{f.add_count}</span>
                           <span className="text-red-600">−{f.del_count}</span>
                         </span>
@@ -1364,6 +1458,66 @@ function TopicDialog({
           </Button>
           <Button onClick={submit} disabled={busy}>
             {busy ? t("common:action.saving") : t("common:action.save")}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function ChangeEditDialog({
+  path,
+  initial,
+  onClose,
+  onSave,
+  onError,
+}: {
+  path: string | null;
+  initial: string;
+  onClose: () => void;
+  onSave: (path: string, content: string) => Promise<void>;
+  onError: (msg: string) => void;
+}) {
+  const { t } = useTranslation("changeDetail");
+  const [content, setContent] = useState(initial);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    if (path !== null) setContent(initial);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [path, initial]);
+
+  const save = async () => {
+    if (path === null) return;
+    setBusy(true);
+    try {
+      await onSave(path, content);
+    } catch (err) {
+      onError((err as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Dialog open={path !== null} onOpenChange={(v) => !v && onClose()}>
+      <DialogContent className="sm:max-w-2xl">
+        <DialogHeader>
+          <DialogTitle>{t("actions.editFile")}</DialogTitle>
+          <DialogDescription className="font-mono text-xs">{path}</DialogDescription>
+        </DialogHeader>
+        <Textarea
+          className="h-72 font-mono text-xs"
+          value={content}
+          onChange={(e) => setContent(e.target.value)}
+          spellCheck={false}
+        />
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose} disabled={busy}>
+            {t("common:cancel")}
+          </Button>
+          <Button onClick={save} disabled={busy}>
+            {t("actions.edit")}
           </Button>
         </DialogFooter>
       </DialogContent>

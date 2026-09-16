@@ -97,14 +97,16 @@ func (s *Server) groupIDs(acct *store.Account) map[int64]bool {
 }
 
 // checkAccess evaluates a permission for acct on a project at a given ref.
-// Administrators bypass all checks. Among the matching rules, the most
-// specific ref pattern controls; within that tier a BLOCK/DENY for any of the
-// caller's groups vetoes, otherwise ALLOWs combine (label ranges union).
+// Administrators bypass all checks. Rules are collected from the project and
+// all its ancestors up the parent chain plus the global '*' defaults; the most
+// specific ref pattern across the whole merged set controls, and within that
+// tier a BLOCK/DENY for any of the caller's groups vetoes (regardless of which
+// level declared it) while ALLOWs combine (label ranges union).
 func (s *Server) checkAccess(acct *store.Account, project, ref, permission string) access {
 	if acct != nil && acct.Admin {
 		return access{allowed: true, min: -2, max: 2}
 	}
-	rules, err := s.db.ListAccessRules(project)
+	rules, err := s.db.ListAccessRulesInherited(project)
 	if err != nil {
 		return access{}
 	}

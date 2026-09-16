@@ -115,6 +115,13 @@ export interface ConflictFile {
   conflict: string;
 }
 
+export interface EditInfo {
+  commit: string;
+  base_commit: string;
+  base_ps: number;
+  stale: boolean;
+}
+
 export interface CommentInfo {
   id: number;
   patch_set: number;
@@ -447,6 +454,13 @@ export const api = {
     const b64 = await request<string>(`/changes/${num}/revisions/${ps}/patch`);
     return atob(b64);
   },
+  revisionFileContent: async (num: number | string, ps: number | "current", path: string) => {
+    const res = await fetch(
+      `/changes/${num}/revisions/${ps}/file?path=${encodeURIComponent(path)}&format=text`,
+    );
+    if (!res.ok) throw new ApiError(res.status, await res.text());
+    return res.text();
+  },
   comments: (num: number | string) => request<CommentInfo[]>(`/changes/${num}/comments`),
   resolveComment: (num: number | string, id: number, resolved: boolean) =>
     request<{ id: number; resolved: boolean }>(`/changes/${num}/comments/${id}/resolve`, {
@@ -500,6 +514,20 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ resolutions }),
     }),
+  getEdit: (num: number | string) => request<EditInfo>(`/changes/${num}/edit`),
+  createEdit: (num: number | string) =>
+    request<EditInfo>(`/changes/${num}/edit`, { method: "PUT" }),
+  deleteEdit: (num: number | string) =>
+    request<null>(`/changes/${num}/edit`, { method: "DELETE" }),
+  putEditFile: (num: number | string, path: string, content: string) =>
+    request<EditInfo>(`/changes/${num}/edit/file`, {
+      method: "PUT",
+      body: JSON.stringify({ path, content }),
+    }),
+  deleteEditFile: (num: number | string, path: string) =>
+    request<EditInfo>(`/changes/${num}/edit/file?path=${encodeURIComponent(path)}`, { method: "DELETE" }),
+  publishEdit: (num: number | string) =>
+    request<ChangeInfo>(`/changes/${num}/edit:publish`, { method: "POST" }),
   cherryPick: (num: number | string, destination: string) =>
     request<ChangeInfo>(`/changes/${num}/cherry_pick`, {
       method: "POST",

@@ -11,6 +11,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"gerrit-go/internal/store"
@@ -33,6 +34,9 @@ var changeIDRe = regexp.MustCompile(`(?m)^Change-Id:\s*(I[0-9a-f]{8,40})\s*$`)
 type Service struct {
 	basePath string
 	db       *store.DB
+	// editLocks serializes change-edit operations per change number so
+	// concurrent amends/publishes on the same edit ref cannot interleave.
+	editLocks sync.Map
 }
 
 func New(basePath string, db *store.DB) *Service {

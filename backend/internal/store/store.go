@@ -31,6 +31,7 @@ type Project struct {
 	State            string    `json:"state"`
 	SubmitType       string    `json:"submit_type"`
 	SubmitWholeTopic bool      `json:"submit_whole_topic"`
+	Parent           string    `json:"parent,omitempty"`
 	Created          time.Time `json:"-"`
 }
 
@@ -176,6 +177,7 @@ CREATE TABLE IF NOT EXISTS projects (
   name TEXT PRIMARY KEY,
   description TEXT NOT NULL DEFAULT '',
   head TEXT NOT NULL DEFAULT 'master',
+  parent TEXT NOT NULL DEFAULT '',
   created TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS changes (
@@ -398,6 +400,7 @@ func migrate(db *sql.DB, drv string) error {
 		{"state", "state TEXT NOT NULL DEFAULT 'ACTIVE'"},
 		{"submit_type", "submit_type TEXT NOT NULL DEFAULT 'REBASE_IF_NECESSARY'"},
 		{"submit_whole_topic", "submit_whole_topic INTEGER NOT NULL DEFAULT 0"},
+		{"parent", "parent TEXT NOT NULL DEFAULT ''"},
 	} {
 		if err := addColumnIfMissing(db, drv, "projects", col.name, col.def); err != nil {
 			return err
@@ -637,8 +640,8 @@ func (d *DB) CreateProject(p *Project) error {
 	if submitType == "" {
 		submitType = "REBASE_IF_NECESSARY"
 	}
-	_, err := d.db.Exec(`INSERT INTO projects(name, description, head, state, submit_type, submit_whole_topic, created) VALUES(?,?,?,?,?,?,?)`,
-		p.Name, p.Description, p.Head, state, submitType, b2i(p.SubmitWholeTopic), now())
+	_, err := d.db.Exec(`INSERT INTO projects(name, description, head, state, submit_type, submit_whole_topic, parent, created) VALUES(?,?,?,?,?,?,?,?)`,
+		p.Name, p.Description, p.Head, state, submitType, b2i(p.SubmitWholeTopic), p.Parent, now())
 	return err
 }
 
@@ -646,8 +649,8 @@ func (d *DB) GetProject(name string) (*Project, error) {
 	p := &Project{}
 	var created string
 	var whole int
-	err := d.db.QueryRow(`SELECT name, description, head, state, submit_type, submit_whole_topic, created FROM projects WHERE name=?`, name).
-		Scan(&p.Name, &p.Description, &p.Head, &p.State, &p.SubmitType, &whole, &created)
+	err := d.db.QueryRow(`SELECT name, description, head, state, submit_type, submit_whole_topic, parent, created FROM projects WHERE name=?`, name).
+		Scan(&p.Name, &p.Description, &p.Head, &p.State, &p.SubmitType, &whole, &p.Parent, &created)
 	if err != nil {
 		return nil, err
 	}
@@ -657,7 +660,7 @@ func (d *DB) GetProject(name string) (*Project, error) {
 }
 
 func (d *DB) ListProjects() ([]*Project, error) {
-	rows, err := d.db.Query(`SELECT name, description, head, state, submit_type, submit_whole_topic, created FROM projects ORDER BY name`)
+	rows, err := d.db.Query(`SELECT name, description, head, state, submit_type, submit_whole_topic, parent, created FROM projects ORDER BY name`)
 	if err != nil {
 		return nil, err
 	}
@@ -667,7 +670,7 @@ func (d *DB) ListProjects() ([]*Project, error) {
 		p := &Project{}
 		var created string
 		var whole int
-		if err := rows.Scan(&p.Name, &p.Description, &p.Head, &p.State, &p.SubmitType, &whole, &created); err != nil {
+		if err := rows.Scan(&p.Name, &p.Description, &p.Head, &p.State, &p.SubmitType, &whole, &p.Parent, &created); err != nil {
 			return nil, err
 		}
 		p.SubmitWholeTopic = whole == 1
@@ -686,6 +689,13 @@ func (d *DB) SetProjectSubmitType(name, submitType string, wholeTopic bool) erro
 
 func (d *DB) SetProjectState(name, state string) error {
 	_, err := d.db.Exec(`UPDATE projects SET state=? WHERE name=?`, state, name)
+	return err
+}
+
+// SetProjectParent updates a project's parent. An empty parent means the
+// project inherits only from the global '*' defaults.
+func (d *DB) SetProjectParent(name, parent string) error {
+	_, err := d.db.Exec(`UPDATE projects SET parent=? WHERE name=?`, parent, name)
 	return err
 }
 

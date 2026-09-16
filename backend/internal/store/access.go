@@ -2,6 +2,7 @@ package store
 
 import (
 	"database/sql"
+	"strings"
 	"time"
 )
 
@@ -158,6 +159,74 @@ func (d *DB) GroupsForAccount(accountID int64) ([]*Group, error) {
 }
 
 // ---------- access rules ----------
+
+// maxParentDepth bounds how far ProjectParentChain ascends. Real hierarchies
+// are a handful of levels deep; the cap is a safety net against pathological
+// configurations.
+const maxParentDepth = 16
+
+// ProjectParentChain returns project followed by its ancestors, ordered
+// closest-first: [project, parent, grandparent, ...]. The chain stops at a
+// project with an empty parent, a missing parent row, a repeated name (cycle),
+// or the depth cap. The global sentinel "*" is never part of the chain.
+func (d *DB) ProjectParentChain(project string) ([]string, error) {
+	chain := []string{project}
+	seen := map[string]bool{project: true}
+	cur := project
+	for len(chain) < maxParentDepth {
+		var parent string
+		err := d.db.QueryRow(`SELECT parent FROM projects WHERE name=?`, cur).Scan(&parent)
+		if err != nil || parent == "" || parent == "*" || seen[parent] {
+			break
+		}
+		chain = append(chain, parent)
+		seen[parent] = true
+		cur = parent
+	}
+	return chain, nil
+}
+
+// ListAccessRulesInherited returns the access rules that apply to project:
+// its own rules, every ancestor's rules up the parent chain, and the global
+// '*' defaults. A project with an empty parent yields exactly the same set as
+// ListAccessRules, so existing flat projects are unaffected.
+func (d *DB) ListAccessRulesInherited(project string) ([]*AccessRule, error) {
+	if project == "*" {
+		return d.ListAccessRules(project)
+	}
+	chain, err := d.ProjectParentChain(project)
+	if err != nil {
+		return nil, err
+	}
+	placeholders := make([]string, len(chain))
+	args := make([]any, 0, len(chain))
+	for i, name := range chain {
+		placeholders[i] = "?"
+		args = append(args, name)
+	}
+	rows, err := d.db.Query(`
+		SELECT r.id, r.project, r.ref_pattern, r.permission, r.group_id, g.name,
+		       r.action, r.exclusive, r.min_val, r.max_val
+		FROM access_rules r JOIN groups g ON g.id = r.group_id
+		WHERE r.project IN (`+strings.Join(placeholders, ",")+`) OR r.project='*'
+		ORDER BY r.permission, r.ref_pattern`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []*AccessRule
+	for rows.Next() {
+		r := &AccessRule{}
+		var excl int
+		if err := rows.Scan(&r.ID, &r.Project, &r.RefPattern, &r.Permission, &r.GroupID, &r.GroupName,
+			&r.Action, &excl, &r.Min, &r.Max); err != nil {
+			return nil, err
+		}
+		r.Exclusive = excl == 1
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
 
 // SetAccessRules replaces all rules of a project with the given set.
 func (d *DB) SetAccessRules(project string, rules []*AccessRule) error {
