@@ -157,7 +157,7 @@ func parsePublicKey(s string) (key, comment string) {
 
 func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
-		"auth": map[string]any{"oauth": s.auth.OAuthEnabled(), "ldap": s.auth.LDAPEnabled()},
+		"auth": map[string]any{"oauth": s.auth.OAuthEnabled(), "ldap": s.auth.LDAPEnabled(), "register": s.allowRegister},
 	})
 }
 

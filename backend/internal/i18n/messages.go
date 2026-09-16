@@ -50,6 +50,8 @@ var enMessages = map[string]string{
 	"err.forbidden":          "permission denied: %s",
 	"err.totpRequired":       "enter your two-factor authentication code",
 	"err.totpInvalid":        "invalid two-factor authentication code",
+	"err.tooManyAttempts":    "too many failed attempts; try again later",
+	"err.registerDisabled":   "registration is disabled",
 }
 
 // Simplified Chinese message templates.
@@ -97,4 +99,6 @@ var zhMessages = map[string]string{
 	"err.forbidden":          "权限不足：%s",
 	"err.totpRequired":       "请输入两步验证码",
 	"err.totpInvalid":        "两步验证码无效",
+	"err.tooManyAttempts":    "失败尝试过多，请稍后再试",
+	"err.registerDisabled":   "已关闭注册",
 }

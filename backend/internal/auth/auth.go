@@ -37,11 +37,20 @@ func (s *Service) OAuthEnabled() bool { return s.oauth.Enabled }
 // OAuthAuthCodeURL builds the provider authorization URL for the given state.
 func (s *Service) OAuthAuthCodeURL(state string) string { return s.oauth.AuthCodeURL(state) }
 
-func (s *Service) BootstrapAdmin() bool {
+// BootstrapAdmin creates the initial administrator on a fresh database and
+// returns its generated password exactly once, so the operator can record it
+// from the startup log. The password is random rather than a well-known
+// default, so a fresh install is not reachable via a guessable admin/secret
+// credential. It returns ("", false) when the admin account already exists.
+func (s *Service) BootstrapAdmin() (string, bool) {
 	if _, err := s.db.GetAccountByUsername("admin"); err == nil {
-		return false
+		return "", false
 	}
-	hash, _ := bcrypt.GenerateFromPassword([]byte("secret"), bcrypt.DefaultCost)
+	password := randomToken(12)
+	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+	if err != nil {
+		return "", false
+	}
 	a := &store.Account{
 		Username:     "admin",
 		PasswordHash: string(hash),
@@ -49,9 +58,11 @@ func (s *Service) BootstrapAdmin() bool {
 		Email:        "admin@localhost",
 		Admin:        true,
 	}
-	s.db.CreateAccount(a)
+	if err := s.db.CreateAccount(a); err != nil {
+		return "", false
+	}
 	s.addToGroup(a.ID, "Administrators")
-	return true
+	return password, true
 }
 
 // addToGroup places an account in a built-in group, ignoring errors (the

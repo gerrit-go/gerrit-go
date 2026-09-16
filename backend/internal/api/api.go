@@ -25,28 +25,41 @@ import (
 )
 
 type Server struct {
-	db      *store.DB
-	auth    *auth.Service
-	git     *gitsvc.Service
-	notify  *notify.Notifier
-	hook    *webhook.Dispatcher
-	metrics *metrics.Registry
-	static  string
-	mux     *http.ServeMux
+	db            *store.DB
+	auth          *auth.Service
+	git           *gitsvc.Service
+	notify        *notify.Notifier
+	hook          *webhook.Dispatcher
+	metrics       *metrics.Registry
+	static        string
+	mux           *http.ServeMux
+	allowRegister bool
+	limiter       *loginLimiter
 }
 
-func NewRouter(db *store.DB, authSvc *auth.Service, gitSvc *gitsvc.Service, notifier *notify.Notifier, staticDir string) http.Handler {
-	return NewServer(db, authSvc, gitSvc, notifier, staticDir).Handler()
+func NewRouter(db *store.DB, authSvc *auth.Service, gitSvc *gitsvc.Service, notifier *notify.Notifier, staticDir string, allowRegister bool) http.Handler {
+	return NewServer(db, authSvc, gitSvc, notifier, staticDir, allowRegister).Handler()
 }
 
 // NewServer builds the API server. Callers that only need the HTTP handler can
 // use NewRouter; NewServer exposes the *Server so auxiliary listeners (e.g. the
 // git+ssh daemon) can share the same dependencies and permission checks.
-func NewServer(db *store.DB, authSvc *auth.Service, gitSvc *gitsvc.Service, notifier *notify.Notifier, staticDir string) *Server {
+func NewServer(db *store.DB, authSvc *auth.Service, gitSvc *gitsvc.Service, notifier *notify.Notifier, staticDir string, allowRegister bool) *Server {
 	reg := metrics.New()
 	hook := webhook.New(db, 10*time.Second)
 	hook.SetCounters(reg.IncWebhookSent, reg.IncWebhookFail)
-	s := &Server{db: db, auth: authSvc, git: gitSvc, notify: notifier, hook: hook, metrics: reg, static: staticDir, mux: http.NewServeMux()}
+	s := &Server{
+		db:            db,
+		auth:          authSvc,
+		git:           gitSvc,
+		notify:        notifier,
+		hook:          hook,
+		metrics:       reg,
+		static:        staticDir,
+		mux:           http.NewServeMux(),
+		allowRegister: allowRegister,
+		limiter:       newLoginLimiter(5, 10*time.Minute, 15*time.Minute),
+	}
 	s.routes()
 	return s
 }
@@ -296,20 +309,38 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, i18n.T(lang, "err.invalidBody"))
 		return
 	}
+	key := loginKey(r, req.Username)
+	if locked, wait := s.limiter.blocked(key); locked {
+		w.Header().Set("Retry-After", strconv.Itoa(int(wait/time.Second)+1))
+		writeErr(w, http.StatusTooManyRequests, i18n.T(lang, "err.tooManyAttempts"))
+		return
+	}
 	acct, err := s.auth.Authenticate(req.Username, req.Password)
 	if err != nil {
+		s.hitLimiter(w, key)
 		writeErr(w, http.StatusUnauthorized, i18n.T(lang, "err.invalidCredentials"))
 		return
 	}
 	if secret, enabled, _ := s.db.GetTOTP(acct.ID); enabled {
-		if req.TOTP == "" || !auth.ValidateTOTP(secret, req.TOTP) {
+		if req.TOTP == "" {
+			// Password is correct; prompt the UI for the second factor. This is
+			// the normal first step, not a failed attempt, so it is not counted.
 			writeJSON(w, http.StatusUnauthorized, map[string]any{
 				"error":         i18n.T(lang, "err.totpRequired"),
 				"totp_required": true,
 			})
 			return
 		}
+		if !auth.ValidateTOTP(secret, req.TOTP) {
+			s.hitLimiter(w, key)
+			writeJSON(w, http.StatusUnauthorized, map[string]any{
+				"error":         i18n.T(lang, "err.totpInvalid"),
+				"totp_required": true,
+			})
+			return
+		}
 	}
+	s.limiter.success(key)
 	id, err := s.auth.CreateSession(acct.ID)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "session error")
@@ -319,7 +350,29 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, accountInfo(acct))
 }
 
+// hitLimiter records a failed login for key and, when the failure trips the
+// lockout threshold, advertises the wait via a Retry-After header.
+func (s *Server) hitLimiter(w http.ResponseWriter, key string) {
+	if d := s.limiter.fail(key); d > 0 {
+		w.Header().Set("Retry-After", strconv.Itoa(int(d/time.Second)))
+	}
+}
+
+// loginKey builds the throttle bucket key from the client IP and username.
+func loginKey(r *http.Request, username string) string {
+	host := r.RemoteAddr
+	if i := strings.LastIndex(host, ":"); i > 0 {
+		host = host[:i]
+	}
+	return host + "|" + strings.ToLower(username)
+}
+
 func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
+	lang := i18n.LangFrom(r.Context())
+	if !s.allowRegister {
+		writeErr(w, http.StatusForbidden, i18n.T(lang, "err.registerDisabled"))
+		return
+	}
 	var req struct {
 		Username string `json:"username"`
 		Password string `json:"password"`

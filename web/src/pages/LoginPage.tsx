@@ -18,12 +18,19 @@ export default function LoginPage() {
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [oauthEnabled, setOauthEnabled] = useState(false);
+  const [registerEnabled, setRegisterEnabled] = useState(false);
 
   useEffect(() => {
     api
       .getConfig()
-      .then((c) => setOauthEnabled(!!c?.auth?.oauth))
-      .catch(() => setOauthEnabled(false));
+      .then((c) => {
+        setOauthEnabled(!!c?.auth?.oauth);
+        setRegisterEnabled(!!c?.auth?.register);
+      })
+      .catch(() => {
+        setOauthEnabled(false);
+        setRegisterEnabled(false);
+      });
     const err = searchParams.get("error");
     if (err) setError(t("ssoFailed", { code: err }));
   }, [searchParams, t]);
@@ -93,7 +100,7 @@ export default function LoginPage() {
           <Tabs defaultValue="login">
             <TabsList className="w-full">
               <TabsTrigger value="login">{t("signInTab")}</TabsTrigger>
-              <TabsTrigger value="register">{t("registerTab")}</TabsTrigger>
+              {registerEnabled && <TabsTrigger value="register">{t("registerTab")}</TabsTrigger>}
             </TabsList>
             <TabsContent value="login">
               <form onSubmit={onLogin} className="flex flex-col gap-4 pt-2">
@@ -139,6 +146,7 @@ export default function LoginPage() {
                 </Button>
               </form>
             </TabsContent>
+            {registerEnabled && (
             <TabsContent value="register">
               <form onSubmit={onRegister} className="flex flex-col gap-4 pt-2">
                 <div className="flex flex-col gap-2">
@@ -184,6 +192,7 @@ export default function LoginPage() {
                 </Button>
               </form>
             </TabsContent>
+            )}
           </Tabs>
         </CardContent>
       </Card>

@@ -44,6 +44,7 @@ func main() {
 	ldapEmailAttr := flag.String("ldap-email-attr", "mail", "email attribute")
 	ldapNameAttr := flag.String("ldap-name-attr", "cn", "display-name attribute")
 	ldapInsecure := flag.Bool("ldap-insecure", false, "skip LDAP TLS certificate verification (ldaps)")
+	allowRegistration := flag.Bool("allow-registration", false, "allow open self-registration via /register (default off; admins can always create accounts)")
 	flag.Parse()
 
 	if err := os.MkdirAll(filepath.Join(*dataDir, "git"), 0o755); err != nil {
@@ -69,23 +70,31 @@ func main() {
 	defer db.Close()
 
 	authSvc := auth.New(db)
-	if created := authSvc.BootstrapAdmin(); created {
-		log.Printf("created initial admin account: username=admin password=secret (change it after first login)")
+	if pw, created := authSvc.BootstrapAdmin(); created {
+		log.Printf("created initial admin account: username=admin password=%s — record it now, change it immediately, and disable password login if you use SSO", pw)
 	}
 
-	redirectURL := *oauthRedirectURL
+	// OAuth2/OIDC settings may be supplied via flags or environment, so that
+	// container deployments can keep the client secret out of the process args.
+	envOr := func(v, key string) string {
+		if v != "" {
+			return v
+		}
+		return os.Getenv(key)
+	}
+	redirectURL := envOr(*oauthRedirectURL, "GERRIT_GO_OAUTH_REDIRECT_URL")
 	if redirectURL == "" && *webURL != "" {
 		redirectURL = strings.TrimSuffix(*webURL, "/") + "/oauth/callback"
 	}
 	authSvc.ConfigureOAuth(auth.OAuthConfig{
-		AuthURL:      *oauthAuthURL,
-		TokenURL:     *oauthTokenURL,
-		UserInfoURL:  *oauthUserInfoURL,
-		ClientID:     *oauthClientID,
-		ClientSecret: *oauthClientSecret,
+		AuthURL:      envOr(*oauthAuthURL, "GERRIT_GO_OAUTH_AUTH_URL"),
+		TokenURL:     envOr(*oauthTokenURL, "GERRIT_GO_OAUTH_TOKEN_URL"),
+		UserInfoURL:  envOr(*oauthUserInfoURL, "GERRIT_GO_OAUTH_USERINFO_URL"),
+		ClientID:     envOr(*oauthClientID, "GERRIT_GO_OAUTH_CLIENT_ID"),
+		ClientSecret: envOr(*oauthClientSecret, "GERRIT_GO_OAUTH_CLIENT_SECRET"),
 		RedirectURL:  redirectURL,
 		Scopes:       *oauthScopes,
-		Domain:       *oauthDomain,
+		Domain:       envOr(*oauthDomain, "GERRIT_GO_OAUTH_DOMAIN"),
 	})
 	if authSvc.OAuthEnabled() {
 		log.Printf("OAuth2/OIDC single sign-on enabled (redirect: %s)", redirectURL)
@@ -117,7 +126,7 @@ func main() {
 	if *smtpHost == "" {
 		log.Printf("email notifications disabled (set -smtp-host to enable); in-app notifications active")
 	}
-	srv := api.NewServer(db, authSvc, gitSvc, notifier, *staticDir)
+	srv := api.NewServer(db, authSvc, gitSvc, notifier, *staticDir, *allowRegistration)
 	handler := srv.Handler()
 
 	if *sshAddr != "" {

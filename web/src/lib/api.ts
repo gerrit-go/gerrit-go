@@ -603,7 +603,7 @@ export const api = {
       body: JSON.stringify(id ? { id } : {}),
     }),
 
-  getConfig: () => request<{ auth: { oauth: boolean; ldap?: boolean } }>("/config"),
+  getConfig: () => request<{ auth: { oauth: boolean; ldap?: boolean; register?: boolean } }>("/config"),
   updateSelf: (body: { name?: string; email?: string }) =>
     request<AccountInfo>("/accounts/self", { method: "PUT", body: JSON.stringify(body) }),
   setPassword: (oldPassword: string, newPassword: string) =>
