@@ -33,13 +33,14 @@ type AccessRule struct {
 // ---------- groups ----------
 
 func (d *DB) CreateGroup(g *Group) error {
-	res, err := d.db.Exec(
+	id, err := d.insertID(
 		`INSERT INTO groups(name, description, owner_group_id, system, created) VALUES(?,?,?,?,?)`,
+		"id",
 		g.Name, g.Description, g.OwnerGroupID, b2i(g.System), now())
 	if err != nil {
 		return err
 	}
-	g.ID, _ = res.LastInsertId()
+	g.ID = id
 	g.Created = parseTime(now())
 	return nil
 }
@@ -399,13 +400,14 @@ type Notification struct {
 }
 
 func (d *DB) CreateNotification(n *Notification) error {
-	res, err := d.db.Exec(
+	id, err := d.insertID(
 		`INSERT INTO notifications(account_id, change_number, type, message, actor_id, read, created) VALUES(?,?,?,?,?,0,?)`,
+		"id",
 		n.AccountID, n.ChangeNumber, n.Type, n.Message, n.ActorID, now())
 	if err != nil {
 		return err
 	}
-	n.ID, _ = res.LastInsertId()
+	n.ID = id
 	n.Created = parseTime(now())
 	n.Read = false
 	return nil

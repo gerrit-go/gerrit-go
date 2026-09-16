@@ -117,13 +117,10 @@ func joinEvents(ev []string) string {
 
 // CreateWebhook registers a webhook and returns it with its assigned ID.
 func (d *DB) CreateWebhook(w *Webhook) (*Webhook, error) {
-	res, err := d.db.Exec(
+	id, err := d.insertID(
 		`INSERT INTO webhooks(project, url, events, secret, active, created) VALUES(?,?,?,?,?,?)`,
+		"id",
 		w.Project, w.URL, joinEvents(w.Events), w.Secret, b2i(w.Active), now())
-	if err != nil {
-		return nil, err
-	}
-	id, err := res.LastInsertId()
 	if err != nil {
 		return nil, err
 	}

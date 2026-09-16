@@ -8,13 +8,14 @@ RUN npm ci
 COPY web/ ./
 RUN npm run build
 
-# ---- Stage 2: build the Go backend (pure-Go sqlite, static binary) ----
+# ---- Stage 2: build the Go backend (static binary; SQLite or PostgreSQL) ----
 FROM golang:1.25-alpine AS backend
 WORKDIR /src/backend
 COPY backend/go.mod backend/go.sum ./
 RUN go mod download
 COPY backend/ ./
-RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/gerrit-go ./cmd/server
+RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/gerrit-go ./cmd/server \
+ && CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/migrate-db ./cmd/migrate-db
 
 # ---- Stage 3: runtime ----
 # git is required at runtime: the server shells out to `git http-backend` for
@@ -23,6 +24,7 @@ FROM alpine:3.20
 RUN apk add --no-cache git ca-certificates tzdata
 WORKDIR /app
 COPY --from=backend /out/gerrit-go /app/gerrit-go
+COPY --from=backend /out/migrate-db /app/migrate-db
 COPY --from=web /src/web/dist /app/dist
 RUN mkdir -p /data
 VOLUME ["/data"]

@@ -126,27 +126,38 @@ type Reviewer struct {
 	Added        time.Time `json:"-"`
 }
 
-func Open(path string) (*DB, error) {
-	db, err := sql.Open("sqlite", path+"?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)")
+func Open(dsn string) (*DB, error) {
+	if IsPostgresDSN(dsn) {
+		db, err := sql.Open(pgDriverName, dsn)
+		if err != nil {
+			return nil, err
+		}
+		if err := migrate(db, DriverPostgres); err != nil {
+			db.Close()
+			return nil, err
+		}
+		return &DB{db: db, driver: DriverPostgres}, nil
+	}
+	db, err := sql.Open("sqlite", dsn+"?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)")
 	if err != nil {
 		return nil, err
 	}
 	db.SetMaxOpenConns(1) // modernc sqlite + WAL: single writer avoids contention
-	if err := migrate(db); err != nil {
+	if err := migrate(db, DriverSQLite); err != nil {
 		db.Close()
 		return nil, err
 	}
-	return &DB{db: db}, nil
+	return &DB{db: db, driver: DriverSQLite}, nil
 }
 
 type DB struct {
-	db *sql.DB
+	db     *sql.DB
+	driver string
 }
 
 func (d *DB) Close() error { return d.db.Close() }
 
-func migrate(db *sql.DB) error {
-	schema := `
+const schemaSQLite = `
 CREATE TABLE IF NOT EXISTS accounts (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   username TEXT NOT NULL UNIQUE,
@@ -357,7 +368,19 @@ CREATE TABLE IF NOT EXISTS audit_log (
   created TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_audit_id ON audit_log(id);`
-	if _, err := db.Exec(schema); err != nil {
+
+func migrate(db *sql.DB, drv string) error {
+	schema := schemaSQLite
+	if drv == DriverPostgres {
+		schema = toPostgresSchema(schemaSQLite)
+		// lib/pq cannot prepare a multi-statement string, so run each
+		// CREATE statement separately.
+		for _, stmt := range splitStatements(schema) {
+			if _, err := db.Exec(stmt); err != nil {
+				return err
+			}
+		}
+	} else if _, err := db.Exec(schema); err != nil {
 		return err
 	}
 	// Upgrade databases created before topic/WIP/private existed.
@@ -367,7 +390,7 @@ CREATE INDEX IF NOT EXISTS idx_audit_id ON audit_log(id);`
 		{"private", "private INTEGER NOT NULL DEFAULT 0"},
 		{"assignee_id", "assignee_id INTEGER NOT NULL DEFAULT 0"},
 	} {
-		if err := addColumnIfMissing(db, "changes", col.name, col.def); err != nil {
+		if err := addColumnIfMissing(db, drv, "changes", col.name, col.def); err != nil {
 			return err
 		}
 	}
@@ -376,11 +399,11 @@ CREATE INDEX IF NOT EXISTS idx_audit_id ON audit_log(id);`
 		{"submit_type", "submit_type TEXT NOT NULL DEFAULT 'REBASE_IF_NECESSARY'"},
 		{"submit_whole_topic", "submit_whole_topic INTEGER NOT NULL DEFAULT 0"},
 	} {
-		if err := addColumnIfMissing(db, "projects", col.name, col.def); err != nil {
+		if err := addColumnIfMissing(db, drv, "projects", col.name, col.def); err != nil {
 			return err
 		}
 	}
-	if err := addColumnIfMissing(db, "comments", "resolved", "resolved INTEGER NOT NULL DEFAULT 0"); err != nil {
+	if err := addColumnIfMissing(db, drv, "comments", "resolved", "resolved INTEGER NOT NULL DEFAULT 0"); err != nil {
 		return err
 	}
 	for _, col := range []struct{ name, def string }{
@@ -389,7 +412,7 @@ CREATE INDEX IF NOT EXISTS idx_audit_id ON audit_log(id);`
 		{"totp_secret", "totp_secret TEXT NOT NULL DEFAULT ''"},
 		{"totp_enabled", "totp_enabled INTEGER NOT NULL DEFAULT 0"},
 	} {
-		if err := addColumnIfMissing(db, "accounts", col.name, col.def); err != nil {
+		if err := addColumnIfMissing(db, drv, "accounts", col.name, col.def); err != nil {
 			return err
 		}
 	}
@@ -452,13 +475,29 @@ func seedDefaults(db *sql.DB) error {
 }
 
 // addColumnIfMissing adds a column to a table when an older schema lacks it.
-func addColumnIfMissing(db *sql.DB, table, column, def string) error {
-	rows, err := db.Query(`PRAGMA table_info(` + table + `)`)
+func addColumnIfMissing(db *sql.DB, drv, table, column, def string) error {
+	var rows *sql.Rows
+	var err error
+	if drv == DriverPostgres {
+		rows, err = db.Query(`SELECT column_name FROM information_schema.columns WHERE table_name=$1`, table)
+	} else {
+		rows, err = db.Query(`PRAGMA table_info(` + table + `)`)
+	}
 	if err != nil {
 		return err
 	}
 	defer rows.Close()
 	for rows.Next() {
+		if drv == DriverPostgres {
+			var name string
+			if err := rows.Scan(&name); err != nil {
+				return err
+			}
+			if name == column {
+				return nil
+			}
+			continue
+		}
 		var cid int
 		var name, ctype string
 		var notnull, pk int
@@ -498,13 +537,14 @@ func parseTimePtr(s sql.NullString) *time.Time {
 // ---------- accounts ----------
 
 func (d *DB) CreateAccount(a *Account) error {
-	res, err := d.db.Exec(
+	id, err := d.insertID(
 		`INSERT INTO accounts(username, password_hash, full_name, email, admin, created) VALUES(?,?,?,?,?,?)`,
+		"id",
 		a.Username, a.PasswordHash, a.FullName, a.Email, b2i(a.Admin), now())
 	if err != nil {
 		return err
 	}
-	a.ID, _ = res.LastInsertId()
+	a.ID = id
 	return nil
 }
 
@@ -652,13 +692,14 @@ func (d *DB) SetProjectState(name, state string) error {
 // ---------- changes ----------
 
 func (d *DB) CreateChange(c *Change) error {
-	res, err := d.db.Exec(
+	id, err := d.insertID(
 		`INSERT INTO changes(project, branch, change_id, subject, owner_id, status, topic, work_in_progress, private, current_ps, created, updated) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`,
+		"number",
 		c.Project, c.Branch, c.ChangeID, c.Subject, c.OwnerID, "NEW", c.Topic, b2i(c.WorkInProgress), b2i(c.Private), c.CurrentPS, now(), now())
 	if err != nil {
 		return err
 	}
-	c.Number, _ = res.LastInsertId()
+	c.Number = id
 	c.Status = "NEW"
 	c.Created = parseTime(now())
 	c.Updated = c.Created
@@ -958,14 +999,15 @@ func (d *DB) ListVotes(changeNumber int64) ([]*VoteInfo, error) {
 // ---------- comments ----------
 
 func (d *DB) CreateComment(c *Comment) error {
-	res, err := d.db.Exec(`
+	id, err := d.insertID(`
 		INSERT INTO comments(change_number, patch_set, file, line, message, author_id, in_reply_to, created)
 		VALUES(?,?,?,?,?,?,?,?)`,
+		"id",
 		c.ChangeNum, c.PatchSet, c.File, c.Line, c.Message, c.AuthorID, c.InReplyTo, now())
 	if err != nil {
 		return err
 	}
-	c.ID, _ = res.LastInsertId()
+	c.ID = id
 	c.Created = parseTime(now())
 	return nil
 }
@@ -1022,14 +1064,15 @@ func (d *DB) GetComment(id int64) (*Comment, error) {
 // ---------- comment drafts ----------
 
 func (d *DB) CreateDraft(dr *CommentDraft) error {
-	res, err := d.db.Exec(`
+	id, err := d.insertID(`
 		INSERT INTO comment_drafts(change_number, patch_set, account_id, file, line, message, in_reply_to, created)
 		VALUES(?,?,?,?,?,?,?,?)`,
+		"id",
 		dr.ChangeNum, dr.PatchSet, dr.AccountID, dr.File, dr.Line, dr.Message, dr.InReplyTo, now())
 	if err != nil {
 		return err
 	}
-	dr.ID, _ = res.LastInsertId()
+	dr.ID = id
 	dr.Created = parseTime(now())
 	return nil
 }
@@ -1109,13 +1152,14 @@ func (d *DB) SetPrivate(number int64, priv bool) error {
 // ---------- change messages (unified timeline) ----------
 
 func (d *DB) AddChangeMessage(m *ChangeMessage) error {
-	res, err := d.db.Exec(
+	id, err := d.insertID(
 		`INSERT INTO change_messages(change_number, patch_set, type, author_id, message, created) VALUES(?,?,?,?,?,?)`,
+		"id",
 		m.ChangeNum, m.PatchSet, m.Type, m.AuthorID, m.Message, now())
 	if err != nil {
 		return err
 	}
-	m.ID, _ = res.LastInsertId()
+	m.ID = id
 	m.Created = parseTime(now())
 	return nil
 }
@@ -1189,4 +1233,19 @@ func b2i(b bool) int {
 		return 1
 	}
 	return 0
+}
+
+// insertID executes an INSERT and returns the new row's id column. SQLite
+// reports it via LastInsertId; PostgreSQL requires a RETURNING clause.
+func (d *DB) insertID(q, idCol string, args ...any) (int64, error) {
+	if d.driver == DriverPostgres {
+		var id int64
+		err := d.db.QueryRow(q+" RETURNING "+idCol, args...).Scan(&id)
+		return id, err
+	}
+	res, err := d.db.Exec(q, args...)
+	if err != nil {
+		return 0, err
+	}
+	return res.LastInsertId()
 }

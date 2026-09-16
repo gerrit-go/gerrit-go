@@ -19,6 +19,7 @@ func main() {
 	addr := flag.String("addr", ":8080", "listen address")
 	sshAddr := flag.String("ssh-addr", ":29418", "git+ssh listen address (empty disables SSH)")
 	dataDir := flag.String("data", "data", "data directory (db + git repos)")
+	dbDSN := flag.String("db", "", "database DSN: postgres(ql)://... for PostgreSQL, otherwise a SQLite file path (empty => <data>/gerrit.db)")
 	staticDir := flag.String("static", "", "directory of built frontend assets (optional)")
 	webURL := flag.String("web-url", "", "canonical web URL used in notification emails (optional)")
 	smtpHost := flag.String("smtp-host", "", "SMTP host for email notifications (empty disables email)")
@@ -49,7 +50,19 @@ func main() {
 		log.Fatalf("create data dir: %v", err)
 	}
 
-	db, err := store.Open(filepath.Join(*dataDir, "gerrit.db"))
+	dsn := *dbDSN
+	if dsn == "" {
+		dsn = os.Getenv("GERRIT_GO_DB")
+	}
+	if dsn == "" {
+		dsn = filepath.Join(*dataDir, "gerrit.db")
+	}
+	if store.IsPostgresDSN(dsn) {
+		log.Printf("using PostgreSQL backend")
+	} else {
+		log.Printf("using SQLite backend: %s", dsn)
+	}
+	db, err := store.Open(dsn)
 	if err != nil {
 		log.Fatalf("open store: %v", err)
 	}

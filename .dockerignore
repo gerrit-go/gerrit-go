@@ -11,6 +11,10 @@ backend/data
 backend/server
 *.exe
 
+# Compose runtime volumes (git repos + PostgreSQL data)
+/data
+/pgdata
+
 # Node
 web/node_modules
 web/dist

@@ -86,12 +86,13 @@ func (d *DB) SetExternalID(id int64, externalID string) error {
 }
 
 func (d *DB) CreateSSHKey(k *SSHKey) error {
-	res, err := d.db.Exec(`INSERT INTO ssh_keys(account_id, public_key, comment, created) VALUES(?,?,?,?)`,
+	id, err := d.insertID(`INSERT INTO ssh_keys(account_id, public_key, comment, created) VALUES(?,?,?,?)`,
+		"id",
 		k.AccountID, k.PublicKey, k.Comment, now())
 	if err != nil {
 		return err
 	}
-	k.ID, _ = res.LastInsertId()
+	k.ID = id
 	k.Created = parseTime(now())
 	return nil
 }

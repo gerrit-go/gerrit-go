@@ -1,4 +1,21 @@
 services:
+  db:
+    image: postgres:16-alpine
+    container_name: gerrit-go-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-gerrit}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-gerrit}
+      POSTGRES_DB: ${POSTGRES_DB:-gerrit}
+    volumes:
+      # PostgreSQL data directory; survives container rebuilds.
+      - ./pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-gerrit} -d ${POSTGRES_DB:-gerrit}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
   gerrit-go:
     build:
       context: .
@@ -6,15 +23,26 @@ services:
     image: gerrit-go:latest
     container_name: gerrit-go
     restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      # Selects the PostgreSQL backend. Leave unset to fall back to SQLite at
+      # /data/gerrit.db. The backend reads GERRIT_GO_DB when -db is not passed.
+      GERRIT_GO_DB: postgres://${POSTGRES_USER:-gerrit}:${POSTGRES_PASSWORD:-gerrit}@db:5432/${POSTGRES_DB:-gerrit}?sslmode=disable
     ports:
       # Host port is configurable; override with GERRIT_GO_PORT in a .env file.
       - "${GERRIT_GO_PORT:-8080}:8080"
       # git+ssh (git clone/push over SSH, gerrit CLI). Override with GERRIT_GO_SSH_PORT.
       - "${GERRIT_GO_SSH_PORT:-29418}:29418"
     volumes:
-      # SQLite DB + bare git repos live here and survive container rebuilds.
+      # Bare git repos live here and survive container rebuilds.
       - ./data:/data
     # Optional: expose SMTP / OAuth / canonical web URL by extending command, e.g.
     # command: ["-addr", ":8080", "-data", "/data", "-static", "/app/dist",
     #           "-web-url", "https://code.example.com",
     #           "-smtp-host", "smtp.example.com", "-smtp-from", "gerrit@example.com"]
+    #
+    # One-time SQLite -> PostgreSQL migration of existing data (run once):
+    #   docker compose run --rm --entrypoint /app/migrate-db gerrit-go \
+    #     -from /data/gerrit.db -to "$GERRIT_GO_DB"
