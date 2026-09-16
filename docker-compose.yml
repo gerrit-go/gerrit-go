@@ -26,10 +26,27 @@ services:
     depends_on:
       db:
         condition: service_healthy
+    # Lets the container reach services published on the NAS host by name
+    # (host.docker.internal). Used so the backend can call Authentik's
+    # token/userinfo endpoints over the host-published port without joining
+    # the Authentik compose network.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     environment:
       # Selects the PostgreSQL backend. Leave unset to fall back to SQLite at
       # /data/gerrit.db. The backend reads GERRIT_GO_DB when -db is not passed.
       GERRIT_GO_DB: postgres://${POSTGRES_USER:-gerrit}:${POSTGRES_PASSWORD:-gerrit}@db:5432/${POSTGRES_DB:-gerrit}?sslmode=disable
+      # OAuth2/OIDC single sign-on (e.g. Authentik). All optional: leave unset
+      # to disable SSO. The authorize URL must be reachable by the user's
+      # browser; the token/userinfo URLs only by this container (use
+      # host.docker.internal or a shared network). Secrets come from .env.
+      GERRIT_GO_OAUTH_AUTH_URL: ${OAUTH_AUTH_URL:-}
+      GERRIT_GO_OAUTH_TOKEN_URL: ${OAUTH_TOKEN_URL:-}
+      GERRIT_GO_OAUTH_USERINFO_URL: ${OAUTH_USERINFO_URL:-}
+      GERRIT_GO_OAUTH_CLIENT_ID: ${OAUTH_CLIENT_ID:-}
+      GERRIT_GO_OAUTH_CLIENT_SECRET: ${OAUTH_CLIENT_SECRET:-}
+      GERRIT_GO_OAUTH_REDIRECT_URL: ${OAUTH_REDIRECT_URL:-}
+      GERRIT_GO_OAUTH_DOMAIN: ${OAUTH_DOMAIN:-}
     ports:
       # Host port is configurable; override with GERRIT_GO_PORT in a .env file.
       - "${GERRIT_GO_PORT:-8080}:8080"

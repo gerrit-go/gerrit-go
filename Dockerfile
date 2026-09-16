@@ -19,9 +19,13 @@ RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/gerrit-
 
 # ---- Stage 3: runtime ----
 # git is required at runtime: the server shells out to `git http-backend` for
-# Smart HTTP and to `git` for submit/rebase/cherry-pick strategies.
-FROM alpine:3.20
-RUN apk add --no-cache git ca-certificates tzdata
+# Smart HTTP and to `git` for submit/rebase/cherry-pick strategies. Alpine's git
+# package omits the git-http-backend CGI, which makes Smart HTTP return empty
+# responses, so the runtime uses Debian (its git package ships git-http-backend).
+FROM debian:bookworm-slim
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        git ca-certificates tzdata wget \
+ && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY --from=backend /out/gerrit-go /app/gerrit-go
 COPY --from=backend /out/migrate-db /app/migrate-db
