@@ -461,14 +461,39 @@ func (s *Service) ListBranches(project string) ([]*BranchInfo, error) {
 	return out, nil
 }
 
+// headOrFirstBranch resolves the repository HEAD, falling back to the first
+// available branch when HEAD is unborn or points at a missing ref. Repositories
+// imported from Gerrit commonly have a HEAD referencing a branch (e.g. master)
+// that was never created locally, which would otherwise make tree/commit views
+// fail even though the repository has valid branches.
+func headOrFirstBranch(repo *git.Repository) (plumbing.Hash, error) {
+	if head, err := repo.Head(); err == nil {
+		return head.Hash(), nil
+	}
+	branches, err := repo.Branches()
+	if err != nil {
+		return plumbing.ZeroHash, ErrProjectMissing
+	}
+	var first plumbing.Hash
+	var found bool
+	_ = branches.ForEach(func(ref *plumbing.Reference) error {
+		first = ref.Hash()
+		found = true
+		return io.EOF
+	})
+	if !found {
+		return plumbing.ZeroHash, ErrProjectMissing
+	}
+	return first, nil
+}
+
 func (s *Service) resolveCommit(repo *git.Repository, rev string) (*object.Commit, error) {
 	if rev == "" {
-		head, err := repo.Head()
+		h, err := headOrFirstBranch(repo)
 		if err != nil {
-			// Empty repo: fall back to the configured HEAD branch (unborn).
-			return nil, ErrProjectMissing
+			return nil, err
 		}
-		return repo.CommitObject(head.Hash())
+		return repo.CommitObject(h)
 	}
 	h := plumbing.NewHash(rev)
 	if h.String() == rev {
@@ -558,6 +583,12 @@ func (s *Service) ListCommits(project, rev string, limit int) ([]*CommitInfo, er
 			return nil, err
 		}
 		opts.From = *resolved
+	} else {
+		h, err := headOrFirstBranch(repo)
+		if err != nil {
+			return nil, err
+		}
+		opts.From = h
 	}
 	it, err := repo.Log(opts)
 	if err != nil {
