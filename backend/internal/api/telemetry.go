@@ -114,7 +114,7 @@ func (s *Server) handleListProjectWebhooks(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	if !s.canEditAccess(acct, project) {
-		forbid(w, PermEditAccess)
+		s.forbid(w, r, PermEditAccess)
 		return
 	}
 	hooks, err := s.db.ListWebhooksForProject(project)
@@ -133,7 +133,7 @@ func (s *Server) handleCreateProjectWebhook(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	if !s.canEditAccess(acct, project) {
-		forbid(w, PermEditAccess)
+		s.forbid(w, r, PermEditAccess)
 		return
 	}
 	hook, ok := s.decodeWebhook(w, r, project)
@@ -153,7 +153,7 @@ func (s *Server) handleDeleteProjectWebhook(w http.ResponseWriter, r *http.Reque
 	acct := s.account(r)
 	project := r.PathValue("name")
 	if !s.canEditAccess(acct, project) {
-		forbid(w, PermEditAccess)
+		s.forbid(w, r, PermEditAccess)
 		return
 	}
 	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
@@ -172,7 +172,7 @@ func (s *Server) handleDeleteProjectWebhook(w http.ResponseWriter, r *http.Reque
 func (s *Server) handleListGlobalWebhooks(w http.ResponseWriter, r *http.Request) {
 	acct := s.account(r)
 	if acct == nil || !acct.Admin {
-		forbid(w, "administrateServer")
+		s.forbid(w, r, "administrateServer")
 		return
 	}
 	hooks, err := s.db.ListGlobalWebhooks()
@@ -186,7 +186,7 @@ func (s *Server) handleListGlobalWebhooks(w http.ResponseWriter, r *http.Request
 func (s *Server) handleCreateGlobalWebhook(w http.ResponseWriter, r *http.Request) {
 	acct := s.account(r)
 	if acct == nil || !acct.Admin {
-		forbid(w, "administrateServer")
+		s.forbid(w, r, "administrateServer")
 		return
 	}
 	hook, ok := s.decodeWebhook(w, r, "")
@@ -205,7 +205,7 @@ func (s *Server) handleCreateGlobalWebhook(w http.ResponseWriter, r *http.Reques
 func (s *Server) handleDeleteGlobalWebhook(w http.ResponseWriter, r *http.Request) {
 	acct := s.account(r)
 	if acct == nil || !acct.Admin {
-		forbid(w, "administrateServer")
+		s.forbid(w, r, "administrateServer")
 		return
 	}
 	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
@@ -262,7 +262,7 @@ func hooksOrEmpty(hooks []*store.Webhook) []*store.Webhook {
 func (s *Server) handleListAudit(w http.ResponseWriter, r *http.Request) {
 	acct := s.account(r)
 	if acct == nil || !acct.Admin {
-		forbid(w, "administrateServer")
+		s.forbid(w, r, "administrateServer")
 		return
 	}
 	limit := 50

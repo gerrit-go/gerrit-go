@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
+import { useTranslation } from "react-i18next";
 import { Star } from "lucide-react";
 import { api, type ChangeInfo, type LabelInfo } from "@/lib/api";
 import { Badge } from "@/components/ui/badge";
@@ -18,17 +19,19 @@ import {
 } from "@/components/ui/table";
 
 export function StatusBadge({ status }: { status: ChangeInfo["status"] }) {
+  const { t } = useTranslation("changes");
   switch (status) {
     case "NEW":
-      return <Badge variant="outline" className="border-emerald-600/40 text-emerald-700 dark:text-emerald-400">Open</Badge>;
+      return <Badge variant="outline" className="border-emerald-600/40 text-emerald-700 dark:text-emerald-400">{t("common:status.new")}</Badge>;
     case "MERGED":
-      return <Badge variant="success">Merged</Badge>;
+      return <Badge variant="success">{t("common:status.merged")}</Badge>;
     case "ABANDONED":
-      return <Badge variant="muted" className="line-through">Abandoned</Badge>;
+      return <Badge variant="muted" className="line-through">{t("common:status.abandoned")}</Badge>;
   }
 }
 
 export function VoteChips({ labels }: { labels?: Record<string, LabelInfo> }) {
+  const { t } = useTranslation("changes");
   if (!labels) return null;
   const entries = Object.entries(labels).flatMap(([label, info]) =>
     info.all.map((v) => ({ label, ...v })),
@@ -47,7 +50,12 @@ export function VoteChips({ labels }: { labels?: Record<string, LabelInfo> }) {
                 ? "bg-red-100 text-red-800 dark:bg-red-900/40 dark:text-red-300"
                 : undefined
           }
-          title={`${v.label} ${v.value > 0 ? "+" : ""}${v.value} by ${v.name} (PS ${v.patch_set})`}
+          title={t("voteTooltip", {
+            label: v.label,
+            value: `${v.value > 0 ? "+" : ""}${v.value}`,
+            name: v.name,
+            ps: v.patch_set,
+          })}
         >
           {v.label === "Code-Review" ? "CR" : v.label} {v.value > 0 ? `+${v.value}` : v.value}
         </Badge>
@@ -68,6 +76,7 @@ const PAGE_SIZE = 25;
 export default function ChangesPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const { user } = useAuth();
+  const { t } = useTranslation("changes");
   const q = searchParams.get("q") ?? "";
   const start = Number(searchParams.get("start") ?? "0") || 0;
   const [changes, setChanges] = useState<ChangeInfo[] | null>(null);
@@ -141,13 +150,13 @@ export default function ChangesPage() {
   return (
     <div className="flex flex-col gap-4">
       <div className="flex flex-wrap items-center gap-3">
-        <h1 className="text-xl font-semibold">Changes</h1>
+        <h1 className="text-xl font-semibold">{t("common:nav.changes")}</h1>
         <Tabs value={statusFilter} onValueChange={setTab} className="ml-auto">
           <TabsList>
-            <TabsTrigger value="open">Open</TabsTrigger>
-            <TabsTrigger value="merged">Merged</TabsTrigger>
-            <TabsTrigger value="abandoned">Abandoned</TabsTrigger>
-            <TabsTrigger value="all">All</TabsTrigger>
+            <TabsTrigger value="open">{t("common:status.new")}</TabsTrigger>
+            <TabsTrigger value="merged">{t("common:status.merged")}</TabsTrigger>
+            <TabsTrigger value="abandoned">{t("common:status.abandoned")}</TabsTrigger>
+            <TabsTrigger value="all">{t("common:common.all")}</TabsTrigger>
           </TabsList>
         </Tabs>
       </div>
@@ -166,9 +175,9 @@ export default function ChangesPage() {
         </div>
       ) : changes.length === 0 ? (
         <div className="rounded-lg border border-dashed p-12 text-center text-muted-foreground">
-          No changes found.
+          {t("empty")}
           <div className="mt-2 text-sm">
-            Push to <code className="rounded bg-muted px-1.5 py-0.5 text-foreground">refs/for/&lt;branch&gt;</code> to create a change.
+            {t("emptyHintBefore")}<code className="rounded bg-muted px-1.5 py-0.5 text-foreground">refs/for/&lt;branch&gt;</code>{t("emptyHintAfter")}
           </div>
         </div>
       ) : (
@@ -177,13 +186,13 @@ export default function ChangesPage() {
             <TableHeader>
               <TableRow className="hover:bg-transparent">
                 {user && <TableHead className="w-8" />}
-                <TableHead className="w-16">Number</TableHead>
-                <TableHead>Subject</TableHead>
-                <TableHead className="w-44">Project / Branch</TableHead>
-                <TableHead className="w-32">Owner</TableHead>
-                <TableHead className="w-32">Updated</TableHead>
-                <TableHead className="w-40">Votes</TableHead>
-                <TableHead className="w-24">Status</TableHead>
+                <TableHead className="w-16">{t("number")}</TableHead>
+                <TableHead>{t("common:common.subject")}</TableHead>
+                <TableHead className="w-44">{t("common:common.project")} / {t("common:common.branch")}</TableHead>
+                <TableHead className="w-32">{t("common:common.owner")}</TableHead>
+                <TableHead className="w-32">{t("common:common.updated")}</TableHead>
+                <TableHead className="w-40">{t("votes")}</TableHead>
+                <TableHead className="w-24">{t("status")}</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -193,8 +202,8 @@ export default function ChangesPage() {
                     <TableCell className="pr-0">
                       <button
                         className="text-muted-foreground transition-colors hover:text-foreground"
-                        title={c.starred ? "Unstar" : "Star"}
-                        aria-label={c.starred ? "Unstar" : "Star"}
+                        title={c.starred ? t("unstar") : t("star")}
+                        aria-label={c.starred ? t("unstar") : t("star")}
                         onClick={(e) => {
                           e.stopPropagation();
                           toggleStar(c._number);
@@ -243,7 +252,11 @@ export default function ChangesPage() {
       {changes !== null && total > PAGE_SIZE && (
         <div className="flex items-center justify-between text-sm text-muted-foreground">
           <span>
-            {start + 1}–{Math.min(start + PAGE_SIZE, total)} of {total}
+            {t("range", {
+              from: start + 1,
+              to: Math.min(start + PAGE_SIZE, total),
+              total,
+            })}
           </span>
           <div className="flex gap-2">
             <Button
@@ -252,7 +265,7 @@ export default function ChangesPage() {
               disabled={start === 0}
               onClick={() => gotoStart(start - PAGE_SIZE)}
             >
-              Prev
+              {t("prev")}
             </Button>
             <Button
               variant="outline"
@@ -260,7 +273,7 @@ export default function ChangesPage() {
               disabled={start + PAGE_SIZE >= total}
               onClick={() => gotoStart(start + PAGE_SIZE)}
             >
-              Next
+              {t("next")}
             </Button>
           </div>
         </div>
@@ -270,11 +283,12 @@ export default function ChangesPage() {
 }
 
 function SearchBar({ defaultValue }: { defaultValue: string }) {
+  const { t } = useTranslation("changes");
   return (
     <input
       name="q"
       defaultValue={defaultValue}
-      placeholder="Filter: owner:self reviewer:alice status:open is:starred has:vote (project:foo OR project:bar) -is:wip …"
+      placeholder={t("filterPlaceholder")}
       className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-xs transition-[color,box-shadow] outline-none placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
     />
   );

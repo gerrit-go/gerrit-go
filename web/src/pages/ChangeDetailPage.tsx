@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
+import { useTranslation } from "react-i18next";
+import type { TFunction } from "i18next";
 import {
   ArrowLeft,
   BellRing,
@@ -74,6 +76,7 @@ import { StatusBadge } from "@/pages/ChangesPage";
 export default function ChangeDetailPage() {
   const { num } = useParams();
   const { user } = useAuth();
+  const { t } = useTranslation("changeDetail");
   const navigate = useNavigate();
   const [change, setChange] = useState<ChangeInfo | null>(null);
   const [files, setFiles] = useState<FileDiff[] | null>(null);
@@ -124,7 +127,7 @@ export default function ChangeDetailPage() {
       <div className="py-16 text-center">
         <p className="text-destructive">{error}</p>
         <Button asChild variant="outline" className="mt-4">
-          <Link to="/">Back to changes</Link>
+          <Link to="/">{t("common:notFound.back")}</Link>
         </Button>
       </div>
     );
@@ -169,8 +172,8 @@ export default function ChangeDetailPage() {
           {user && (
             <button
               className="mt-0.5 shrink-0 text-muted-foreground transition-colors hover:text-foreground"
-              title={change.starred ? "Unstar change" : "Star change"}
-              aria-label={change.starred ? "Unstar change" : "Star change"}
+              title={change.starred ? t("header.unstarChange") : t("header.starChange")}
+              aria-label={change.starred ? t("header.unstarChange") : t("header.starChange")}
               onClick={async () => {
                 const next = !change.starred;
                 setChange({ ...change, starred: next });
@@ -196,10 +199,10 @@ export default function ChangeDetailPage() {
               <StatusBadge status={change.status} />
               {change.work_in_progress && (
                 <Badge variant="muted" className="gap-1">
-                  <EyeOff className="size-3" /> WIP
+                  <EyeOff className="size-3" /> {t("header.wip")}
                 </Badge>
               )}
-              {change.private && <Badge variant="outline">Private</Badge>}
+              {change.private && <Badge variant="outline">{t("header.private")}</Badge>}
             </div>
             <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-muted-foreground">
               <span className="font-mono text-xs">#{change._number}</span>
@@ -219,9 +222,9 @@ export default function ChangeDetailPage() {
                 </Link>
               )}
               <span>
-                owner <span className="text-foreground">{change.owner.name}</span>
+                {t("common:common.owner")} <span className="text-foreground">{change.owner.name}</span>
               </span>
-              <span>updated {timeAgo(change.updated)}</span>
+              <span>{t("header.updated", { time: timeAgo(change.updated) })}</span>
             </div>
           </div>
         </div>
@@ -243,21 +246,23 @@ export default function ChangeDetailPage() {
                 disabled={!change.submittable}
                 title={
                   change.submittable
-                    ? `Submit (${change.submit_type ?? "REBASE_IF_NECESSARY"})`
-                    : change.submit_blocked || "Change is not submittable yet"
+                    ? t("actions.submitTooltip", {
+                        strategy: change.submit_type ?? "REBASE_IF_NECESSARY",
+                      })
+                    : change.submit_blocked || t("actions.notSubmittable")
                 }
-                onClick={() => runAction(() => api.submit(change._number), "Change submitted")}
+                onClick={() => runAction(() => api.submit(change._number), t("actions.submitted"))}
               >
                 <Check className="size-4" />
-                Submit
+                {t("actions.submit")}
               </Button>
               <Button
                 size="sm"
                 variant="outline"
-                onClick={() => runAction(() => api.abandon(change._number), "Change abandoned")}
+                onClick={() => runAction(() => api.abandon(change._number), t("actions.abandoned"))}
               >
                 <X className="size-4" />
-                Abandon
+                {t("actions.abandon")}
               </Button>
               <Button
                 size="sm"
@@ -268,12 +273,12 @@ export default function ChangeDetailPage() {
                       change.work_in_progress
                         ? api.clearWIP(change._number)
                         : api.setWIP(change._number),
-                    change.work_in_progress ? "Marked ready for review" : "Marked work-in-progress",
+                    change.work_in_progress ? t("actions.markedReady") : t("actions.markedWip"),
                   )
                 }
               >
                 <EyeOff className="size-4" />
-                {change.work_in_progress ? "Mark ready" : "Mark WIP"}
+                {change.work_in_progress ? t("actions.markReady") : t("actions.markWip")}
               </Button>
               <TopicDialog
                 num={change._number}
@@ -289,15 +294,15 @@ export default function ChangeDetailPage() {
             <Button
               size="sm"
               variant="outline"
-              onClick={() => runAction(() => api.restore(change._number), "Change restored")}
+              onClick={() => runAction(() => api.restore(change._number), t("actions.restored"))}
             >
-              Restore
+              {t("actions.restore")}
             </Button>
           )}
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <Button size="sm" variant="secondary">
-                Download
+                {t("actions.download")}
                 <ChevronDown className="size-3" />
               </Button>
             </DropdownMenuTrigger>
@@ -307,7 +312,7 @@ export default function ChangeDetailPage() {
                 onSelect={() => navigator.clipboard.writeText(checkoutCmd)}
               >
                 <Copy className="size-3" />
-                copy checkout command
+                {t("actions.copyCheckout")}
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
@@ -322,16 +327,16 @@ export default function ChangeDetailPage() {
                 {change.status === "NEW" && (
                   <DropdownMenuItem
                     onSelect={() =>
-                      runAction(() => api.rebase(change._number), "Rebased onto target branch")
+                      runAction(() => api.rebase(change._number), t("actions.rebased"))
                     }
                   >
                     <GitBranch className="size-4" />
-                    Rebase
+                    {t("actions.rebase")}
                   </DropdownMenuItem>
                 )}
                 <DropdownMenuItem onSelect={() => setCherryOpen(true)}>
                   <GitFork className="size-4" />
-                  Cherry-pick
+                  {t("actions.cherryPick")}
                 </DropdownMenuItem>
                 {change.status === "MERGED" && (
                   <DropdownMenuItem
@@ -347,7 +352,7 @@ export default function ChangeDetailPage() {
                     }}
                   >
                     <Undo2 className="size-4" />
-                    Revert
+                    {t("actions.revert")}
                   </DropdownMenuItem>
                 )}
               </DropdownMenuContent>
@@ -371,10 +376,10 @@ export default function ChangeDetailPage() {
                   setPatchSet(e.target.value === "current" ? "current" : Number(e.target.value))
                 }
               >
-                <option value="current">Patch set: latest (#{currentPS})</option>
+                <option value="current">{t("header.psLatest", { ps: currentPS })}</option>
                 {revisions.map((r) => (
                   <option key={r._number} value={String(r._number)}>
-                    Patch set #{r._number} · {r.commit.slice(0, 8)}
+                    {t("header.psOption", { ps: r._number, sha: r.commit.slice(0, 8) })}
                   </option>
                 ))}
               </select>
@@ -386,7 +391,7 @@ export default function ChangeDetailPage() {
         {error && <p className="text-sm text-destructive">{error}</p>}
         {!error && change.status === "NEW" && change.submit_blocked && (
           <p className="text-sm text-muted-foreground">
-            Not submittable: {change.submit_blocked}
+            {t("header.notSubmittable", { reason: change.submit_blocked })}
           </p>
         )}
       </div>
@@ -397,14 +402,14 @@ export default function ChangeDetailPage() {
           <Card className="gap-0 py-0">
             <CardHeader className="flex-row items-center justify-between border-b py-3">
               <CardTitle className="text-sm">
-                Files{" "}
+                {t("files.title")}{" "}
                 <span className="ml-1 font-normal text-muted-foreground">
                   ({files?.length ?? 0})
                 </span>
                 {drafts.length > 0 && (
                   <Badge variant="secondary" className="ml-2 gap-1 text-[10px]">
                     <MessageSquarePlus className="size-3" />
-                    {drafts.length} draft{drafts.length > 1 ? "s" : ""}
+                    {t("files.draftsBadge", { count: drafts.length })}
                   </Badge>
                 )}
               </CardTitle>
@@ -415,7 +420,7 @@ export default function ChangeDetailPage() {
                   className="h-7 px-2 text-xs"
                   onClick={() => setDiffMode("unified")}
                 >
-                  Unified
+                  {t("diff.unified")}
                 </Button>
                 <Button
                   size="sm"
@@ -423,7 +428,7 @@ export default function ChangeDetailPage() {
                   className="h-7 px-2 text-xs"
                   onClick={() => setDiffMode("split")}
                 >
-                  Split
+                  {t("diff.split")}
                 </Button>
               </div>
             </CardHeader>
@@ -443,7 +448,7 @@ export default function ChangeDetailPage() {
                         <span className="font-mono text-xs">{f.path}</span>
                         {f.old_path && (
                           <span className="font-mono text-xs text-muted-foreground">
-                            (renamed from {f.old_path})
+                            {t("files.renamedFrom", { path: f.old_path })}
                           </span>
                         )}
                         <span className="ml-auto flex gap-2 font-mono text-xs">
@@ -464,7 +469,7 @@ export default function ChangeDetailPage() {
                   ))}
                   {files.length === 0 && (
                     <p className="p-6 text-center text-sm text-muted-foreground">
-                      No file changes in this patch set.
+                      {t("files.empty")}
                     </p>
                   )}
                 </div>
@@ -475,11 +480,11 @@ export default function ChangeDetailPage() {
           {/* unified change timeline */}
           <Card className="gap-0 py-0">
             <CardHeader className="border-b py-3">
-              <CardTitle className="text-sm">Change messages ({messages.length})</CardTitle>
+              <CardTitle className="text-sm">{t("messages.title", { num: messages.length })}</CardTitle>
             </CardHeader>
             <CardContent className="p-0">
               {messages.length === 0 ? (
-                <p className="p-6 text-center text-sm text-muted-foreground">No messages yet.</p>
+                <p className="p-6 text-center text-sm text-muted-foreground">{t("messages.empty")}</p>
               ) : (
                 <ul className="divide-y">
                   {messages.map((m) => {
@@ -496,13 +501,13 @@ export default function ChangeDetailPage() {
                         )}
                       >
                         <div className="flex flex-wrap items-center gap-2 text-sm">
-                          <span className="font-medium">{m.author?.name ?? "System"}</span>
+                          <span className="font-medium">{m.author?.name ?? t("messages.system")}</span>
                           <Badge variant="muted" className="text-[10px]">
-                            {messageTypeLabel(m.type)}
+                            {messageTypeLabel(m.type, t)}
                           </Badge>
                           {m.patch_set > 0 && (
                             <Badge variant="muted" className="text-[10px]">
-                              PS {m.patch_set}
+                              {t("ps", { ps: m.patch_set })}
                             </Badge>
                           )}
                           <span className="text-xs text-muted-foreground">{timeAgo(m.date)}</span>
@@ -546,7 +551,7 @@ export default function ChangeDetailPage() {
           />
           <Card className="gap-3 py-4">
             <CardHeader className="px-4 py-0">
-              <CardTitle className="text-sm">Votes</CardTitle>
+              <CardTitle className="text-sm">{t("votes.title")}</CardTitle>
             </CardHeader>
             <CardContent className="flex flex-col gap-3 px-4">
               {["Code-Review", "Verified"].map((label) => {
@@ -570,24 +575,26 @@ export default function ChangeDetailPage() {
                             </span>
                             <span>{v.name}</span>
                             <span className="ml-auto text-xs text-muted-foreground">
-                              PS {v.patch_set}
+                              {t("ps", { ps: v.patch_set })}
                             </span>
                           </li>
                         ))}
                       </ul>
                     ) : (
-                      <span className="text-sm text-muted-foreground">No votes</span>
+                      <span className="text-sm text-muted-foreground">{t("votes.empty")}</span>
                     )}
                   </div>
                 );
               })}
               <Separator />
               <div className="text-xs text-muted-foreground">
-                Submit strategy:{" "}
+                {t("votes.submitStrategy")}{" "}
                 <span className="font-medium text-foreground">
                   {change.submit_type ?? "REBASE_IF_NECESSARY"}
                 </span>
-                . Requires <span className="font-medium text-foreground">Code-Review +2</span>.
+                {t("votes.requiresLead")}
+                <span className="font-medium text-foreground">Code-Review +2</span>
+                {t("votes.requiresTail")}
               </div>
             </CardContent>
           </Card>
@@ -597,7 +604,7 @@ export default function ChangeDetailPage() {
               <CardHeader className="px-4 py-0">
                 <CardTitle className="flex items-center gap-1.5 text-sm">
                   <ListTree className="size-4 text-muted-foreground" />
-                  Relation chain
+                  {t("relations.title")}
                 </CardTitle>
               </CardHeader>
               <CardContent className="flex flex-col gap-1 px-4 text-sm">
@@ -623,7 +630,7 @@ export default function ChangeDetailPage() {
 
           <Card className="gap-3 py-4">
             <CardHeader className="px-4 py-0">
-              <CardTitle className="text-sm">Details</CardTitle>
+              <CardTitle className="text-sm">{t("details.title")}</CardTitle>
             </CardHeader>
             <CardContent className="flex flex-col gap-2 px-4 text-sm">
               <DetailRow
@@ -633,22 +640,22 @@ export default function ChangeDetailPage() {
                 copy={change.change_id}
               />
               <DetailRow
-                label="Commit"
+                label={t("details.commit")}
                 value={change.current_revision?.slice(0, 10) ?? "—"}
                 mono
                 copy={change.current_revision}
               />
-              <DetailRow label="Branch" value={change.branch} mono />
-              <DetailRow label="Created" value={new Date(change.created).toLocaleString()} />
+              <DetailRow label={t("common:common.branch")} value={change.branch} mono />
+              <DetailRow label={t("details.created")} value={new Date(change.created).toLocaleString()} />
               {change.submitted && (
-                <DetailRow label="Submitted" value={new Date(change.submitted).toLocaleString()} />
+                <DetailRow label={t("details.submitted")} value={new Date(change.submitted).toLocaleString()} />
               )}
             </CardContent>
           </Card>
 
           <Card className="gap-3 py-4">
             <CardHeader className="px-4 py-0">
-              <CardTitle className="text-sm">Patch sets</CardTitle>
+              <CardTitle className="text-sm">{t("patchSets.title")}</CardTitle>
             </CardHeader>
             <CardContent className="flex flex-col gap-1 px-4 text-sm">
               {revisions.map((r) => (
@@ -669,7 +676,7 @@ export default function ChangeDetailPage() {
                 </button>
               ))}
               {revisions.length === 0 && (
-                <span className="text-muted-foreground">None</span>
+                <span className="text-muted-foreground">{t("common:common.none")}</span>
               )}
             </CardContent>
           </Card>
@@ -679,28 +686,28 @@ export default function ChangeDetailPage() {
   );
 }
 
-function messageTypeLabel(type: string): string {
+function messageTypeLabel(type: string, t: TFunction<"changeDetail">): string {
   switch (type) {
     case "patchset-uploaded":
-      return "Patch set";
+      return t("messages.types.patchSet");
     case "vote":
-      return "Vote";
+      return t("messages.types.vote");
     case "comment":
-      return "Comment";
+      return t("messages.types.comment");
     case "submitted":
-      return "Merged";
+      return t("common:status.merged");
     case "abandoned":
-      return "Abandoned";
+      return t("common:status.abandoned");
     case "restored":
-      return "Restored";
+      return t("messages.types.restored");
     case "reviewer-added":
-      return "Reviewer +";
+      return t("messages.types.reviewerAdded");
     case "reviewer-removed":
-      return "Reviewer −";
+      return t("messages.types.reviewerRemoved");
     case "topic":
-      return "Topic";
+      return t("messages.types.topic");
     case "wip":
-      return "WIP";
+      return t("messages.types.wip");
     default:
       return type;
   }
@@ -717,6 +724,7 @@ function ReviewersCard({
   ownerId: number;
   onDone: () => Promise<void>;
 }) {
+  const { t } = useTranslation("changeDetail");
   const [value, setValue] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
@@ -753,11 +761,11 @@ function ReviewersCard({
   return (
     <Card className="gap-3 py-4">
       <CardHeader className="px-4 py-0">
-        <CardTitle className="text-sm">Reviewers</CardTitle>
+        <CardTitle className="text-sm">{t("reviewers.title")}</CardTitle>
       </CardHeader>
       <CardContent className="flex flex-col gap-2 px-4">
         {reviewers.length === 0 ? (
-          <span className="text-sm text-muted-foreground">No reviewers</span>
+          <span className="text-sm text-muted-foreground">{t("reviewers.empty")}</span>
         ) : (
           <ul className="flex flex-col gap-1">
             {reviewers.map((rv) => (
@@ -765,14 +773,14 @@ function ReviewersCard({
                 <span className="truncate">{rv.name}</span>
                 {rv._account_id === ownerId && (
                   <Badge variant="muted" className="text-[10px]">
-                    owner
+                    {t("common:common.owner")}
                   </Badge>
                 )}
                 {canEdit && rv._account_id !== ownerId && (
                   <button
                     className="ml-auto text-muted-foreground hover:text-destructive"
                     onClick={() => remove(rv._account_id)}
-                    title="Remove reviewer"
+                    title={t("reviewers.remove")}
                     disabled={busy}
                   >
                     <Trash2 className="size-3.5" />
@@ -787,7 +795,7 @@ function ReviewersCard({
             <Input
               value={value}
               onChange={(e) => setValue(e.target.value)}
-              placeholder="username"
+              placeholder={t("placeholder.username")}
               className="h-8 text-xs"
               onKeyDown={(e) => {
                 if (e.key === "Enter") add();
@@ -813,6 +821,7 @@ function AssigneeCard({
   canEdit: boolean;
   onDone: () => Promise<void>;
 }) {
+  const { t } = useTranslation("changeDetail");
   const [value, setValue] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
@@ -851,7 +860,7 @@ function AssigneeCard({
       <CardHeader className="px-4 py-0">
         <CardTitle className="flex items-center gap-1.5 text-sm">
           <User className="size-4 text-muted-foreground" />
-          Assignee
+          {t("assignee.title")}
         </CardTitle>
       </CardHeader>
       <CardContent className="flex flex-col gap-2 px-4">
@@ -862,7 +871,7 @@ function AssigneeCard({
               <button
                 className="ml-auto text-muted-foreground hover:text-destructive"
                 onClick={clear}
-                title="Remove assignee"
+                title={t("assignee.remove")}
                 disabled={busy}
               >
                 <X className="size-3.5" />
@@ -870,14 +879,14 @@ function AssigneeCard({
             )}
           </div>
         ) : (
-          <span className="text-sm text-muted-foreground">Unassigned</span>
+          <span className="text-sm text-muted-foreground">{t("assignee.unassigned")}</span>
         )}
         {canEdit && (
           <div className="flex gap-1.5">
             <Input
               value={value}
               onChange={(e) => setValue(e.target.value)}
-              placeholder="username"
+              placeholder={t("placeholder.username")}
               className="h-8 text-xs"
               onKeyDown={(e) => {
                 if (e.key === "Enter") set();
@@ -903,6 +912,7 @@ function AttentionCard({
   canEdit: boolean;
   onDone: () => Promise<void>;
 }) {
+  const { t } = useTranslation("changeDetail");
   const [value, setValue] = useState("");
   const [reason, setReason] = useState("");
   const [busy, setBusy] = useState(false);
@@ -943,12 +953,12 @@ function AttentionCard({
       <CardHeader className="px-4 py-0">
         <CardTitle className="flex items-center gap-1.5 text-sm">
           <BellRing className="size-4 text-muted-foreground" />
-          Attention
+          {t("attention.title")}
         </CardTitle>
       </CardHeader>
       <CardContent className="flex flex-col gap-2 px-4">
         {entries.length === 0 ? (
-          <span className="text-sm text-muted-foreground">No one needs to act</span>
+          <span className="text-sm text-muted-foreground">{t("attention.empty")}</span>
         ) : (
           <ul className="flex flex-col gap-1">
             {entries.map((e) => (
@@ -963,7 +973,7 @@ function AttentionCard({
                   <button
                     className="ml-auto text-muted-foreground hover:text-destructive"
                     onClick={() => remove(e.account._account_id)}
-                    title="Remove from attention"
+                    title={t("attention.remove")}
                     disabled={busy}
                   >
                     <Trash2 className="size-3.5" />
@@ -979,7 +989,7 @@ function AttentionCard({
               <Input
                 value={value}
                 onChange={(e) => setValue(e.target.value)}
-                placeholder="username"
+                placeholder={t("placeholder.username")}
                 className="h-8 text-xs"
                 onKeyDown={(e) => {
                   if (e.key === "Enter") add();
@@ -992,7 +1002,7 @@ function AttentionCard({
             <Input
               value={reason}
               onChange={(e) => setReason(e.target.value)}
-              placeholder="reason (optional)"
+              placeholder={t("placeholder.reason")}
               className="h-8 text-xs"
             />
           </div>
@@ -1012,18 +1022,19 @@ function HashtagsCard({
   canEdit: boolean;
   onDone: () => Promise<void>;
 }) {
+  const { t } = useTranslation("changeDetail");
   const [value, setValue] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
   const tags: string[] = change.hashtags ?? [];
 
   const add = async () => {
-    const t = value.trim().replace(/^#/, "");
-    if (!t) return;
+    const tag = value.trim().replace(/^#/, "");
+    if (!tag) return;
     setBusy(true);
     setErr("");
     try {
-      await api.setHashtags(change._number, [t]);
+      await api.setHashtags(change._number, [tag]);
       setValue("");
       await onDone();
     } catch (e) {
@@ -1051,22 +1062,22 @@ function HashtagsCard({
       <CardHeader className="px-4 py-0">
         <CardTitle className="flex items-center gap-1.5 text-sm">
           <Tag className="size-4 text-muted-foreground" />
-          Hashtags
+          {t("hashtags.title")}
         </CardTitle>
       </CardHeader>
       <CardContent className="flex flex-col gap-2 px-4">
         {tags.length === 0 ? (
-          <span className="text-sm text-muted-foreground">No hashtags</span>
+          <span className="text-sm text-muted-foreground">{t("hashtags.empty")}</span>
         ) : (
           <div className="flex flex-wrap gap-1.5">
-            {tags.map((t) => (
-              <Badge key={t} variant="secondary" className="gap-1 text-xs">
-                #{t}
+            {tags.map((tag) => (
+              <Badge key={tag} variant="secondary" className="gap-1 text-xs">
+                #{tag}
                 {canEdit && (
                   <button
                     className="text-muted-foreground hover:text-destructive"
-                    onClick={() => remove(t)}
-                    title="Remove hashtag"
+                    onClick={() => remove(tag)}
+                    title={t("hashtags.remove")}
                     disabled={busy}
                   >
                     <X className="size-3" />
@@ -1081,7 +1092,7 @@ function HashtagsCard({
             <Input
               value={value}
               onChange={(e) => setValue(e.target.value)}
-              placeholder="add hashtag"
+              placeholder={t("placeholder.hashtag")}
               className="h-8 text-xs"
               onKeyDown={(e) => {
                 if (e.key === "Enter") add();
@@ -1115,6 +1126,7 @@ function checkStateIcon(state: string) {
 }
 
 function ChecksCard({ change, canEdit }: { change: ChangeInfo; canEdit: boolean }) {
+  const { t } = useTranslation("changeDetail");
   const [runs, setRuns] = useState<CheckRun[]>([]);
   const [loaded, setLoaded] = useState(false);
   const [name, setName] = useState("");
@@ -1172,14 +1184,14 @@ function ChecksCard({ change, canEdit }: { change: ChangeInfo; canEdit: boolean 
       <CardHeader className="px-4 py-0">
         <CardTitle className="flex items-center gap-1.5 text-sm">
           <ClipboardCheck className="size-4 text-muted-foreground" />
-          Checks
+          {t("checks.title")}
         </CardTitle>
       </CardHeader>
       <CardContent className="flex flex-col gap-2 px-4">
         {!loaded ? (
           <Skeleton className="h-6 w-full" />
         ) : runs.length === 0 ? (
-          <span className="text-sm text-muted-foreground">No checks reported</span>
+          <span className="text-sm text-muted-foreground">{t("checks.empty")}</span>
         ) : (
           <ul className="flex flex-col gap-1.5">
             {runs.map((run) => (
@@ -1202,7 +1214,7 @@ function ChecksCard({ change, canEdit }: { change: ChangeInfo; canEdit: boolean 
                   <button
                     className="ml-auto text-muted-foreground hover:text-destructive"
                     onClick={() => remove(run.check_name)}
-                    title="Remove check"
+                    title={t("checks.remove")}
                     disabled={busy}
                   >
                     <X className="size-3.5" />
@@ -1217,7 +1229,7 @@ function ChecksCard({ change, canEdit }: { change: ChangeInfo; canEdit: boolean 
             <Input
               value={name}
               onChange={(e) => setName(e.target.value)}
-              placeholder="check name (e.g. CI)"
+              placeholder={t("placeholder.checkName")}
               className="h-8 text-xs"
             />
             <div className="flex gap-1.5">
@@ -1235,7 +1247,7 @@ function ChecksCard({ change, canEdit }: { change: ChangeInfo; canEdit: boolean 
               <Input
                 value={url}
                 onChange={(e) => setUrl(e.target.value)}
-                placeholder="url (optional)"
+                placeholder={t("placeholder.url")}
                 className="h-8 flex-1 text-xs"
               />
             </div>
@@ -1247,7 +1259,7 @@ function ChecksCard({ change, canEdit }: { change: ChangeInfo; canEdit: boolean 
               className="self-start"
             >
               <Check className="size-4" />
-              Report check
+              {t("checks.report")}
             </Button>
           </div>
         )}
@@ -1266,6 +1278,7 @@ function TopicDialog({
   topic: string;
   onDone: (msg: string) => Promise<void>;
 }) {
+  const { t } = useTranslation("changeDetail");
   const [open, setOpen] = useState(false);
   const [value, setValue] = useState(topic);
   const [busy, setBusy] = useState(false);
@@ -1279,11 +1292,11 @@ function TopicDialog({
     setBusy(true);
     setErr("");
     try {
-      const t = value.trim();
-      if (t) await api.setTopic(num, t);
+      const trimmed = value.trim();
+      if (trimmed) await api.setTopic(num, trimmed);
       else await api.deleteTopic(num);
       setOpen(false);
-      await onDone(t ? `Topic set to ${t}` : "Topic cleared");
+      await onDone(trimmed ? t("topic.set", { topic: trimmed }) : t("topic.cleared"));
     } catch (e) {
       setErr((e as Error).message);
     } finally {
@@ -1296,20 +1309,20 @@ function TopicDialog({
       <DialogTrigger asChild>
         <Button size="sm" variant="outline">
           <Tag className="size-4" />
-          Topic
+          {t("topic.button")}
         </Button>
       </DialogTrigger>
       <DialogContent className="sm:max-w-sm">
         <DialogHeader>
-          <DialogTitle>Set topic</DialogTitle>
+          <DialogTitle>{t("topic.title")}</DialogTitle>
           <DialogDescription>
-            Group related changes under a topic. Leave empty to clear.
+            {t("topic.description")}
           </DialogDescription>
         </DialogHeader>
         <Input
           value={value}
           onChange={(e) => setValue(e.target.value)}
-          placeholder="e.g. release-2.0"
+          placeholder={t("placeholder.topic")}
           autoFocus
           onKeyDown={(e) => {
             if (e.key === "Enter") submit();
@@ -1318,10 +1331,10 @@ function TopicDialog({
         {err && <p className="text-sm text-destructive">{err}</p>}
         <DialogFooter>
           <Button variant="ghost" onClick={() => setOpen(false)}>
-            Cancel
+            {t("common:action.cancel")}
           </Button>
           <Button onClick={submit} disabled={busy}>
-            {busy ? "Saving…" : "Save"}
+            {busy ? t("common:action.saving") : t("common:action.save")}
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -1346,6 +1359,7 @@ function CherryPickDialog({
   onCreated: (newNum: number) => void;
   onError: (msg: string) => void;
 }) {
+  const { t } = useTranslation("changeDetail");
   const [branches, setBranches] = useState<string[]>([]);
   const [dest, setDest] = useState(defaultBranch);
   const [busy, setBusy] = useState(false);
@@ -1382,21 +1396,21 @@ function CherryPickDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-sm">
         <DialogHeader>
-          <DialogTitle>Cherry-pick change {num}</DialogTitle>
+          <DialogTitle>{t("cherryPick.title", { num })}</DialogTitle>
           <DialogDescription>
-            Apply this change's current commit onto another branch as a new change.
+            {t("cherryPick.description")}
           </DialogDescription>
         </DialogHeader>
         <div className="flex flex-col gap-2">
           <label className="text-sm font-medium" htmlFor="cp-dest">
-            Destination branch
+            {t("cherryPick.destination")}
           </label>
           <Input
             id="cp-dest"
             list="cp-branches"
             value={dest}
             onChange={(e) => setDest(e.target.value)}
-            placeholder="e.g. release-1.0"
+            placeholder={t("placeholder.branch")}
             autoFocus
             onKeyDown={(e) => {
               if (e.key === "Enter") submit();
@@ -1411,10 +1425,10 @@ function CherryPickDialog({
         {err && <p className="text-sm text-destructive">{err}</p>}
         <DialogFooter>
           <Button variant="ghost" onClick={() => onOpenChange(false)}>
-            Cancel
+            {t("common:action.cancel")}
           </Button>
           <Button onClick={submit} disabled={busy || !dest.trim()}>
-            {busy ? "Cherry-picking…" : "Cherry-pick"}
+            {busy ? t("cherryPick.busy") : t("actions.cherryPick")}
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -1433,6 +1447,7 @@ function DetailRow({
   mono?: boolean;
   copy?: string;
 }) {
+  const { t } = useTranslation("changeDetail");
   const [copied, setCopied] = useState(false);
   return (
     <div className="flex items-center gap-2">
@@ -1446,7 +1461,7 @@ function DetailRow({
             setCopied(true);
             setTimeout(() => setCopied(false), 1200);
           }}
-          title="Copy"
+          title={t("common:action.copy")}
         >
           {copied ? <Check className="size-3.5 text-emerald-600" /> : <Copy className="size-3.5" />}
         </button>
@@ -1514,11 +1529,12 @@ function DiffView({
   canComment: boolean;
   reload: () => Promise<void>;
 }) {
+  const { t } = useTranslation("changeDetail");
   const [editor, setEditor] = useState<EditorState | null>(null);
   const [busy, setBusy] = useState(false);
 
   if (file.binary) {
-    return <p className="bg-muted/30 px-4 py-3 text-xs text-muted-foreground">Binary file changed.</p>;
+    return <p className="bg-muted/30 px-4 py-3 text-xs text-muted-foreground">{t("diff.binary")}</p>;
   }
 
   const itemsFor = (line: DiffLine) => {
@@ -1652,7 +1668,7 @@ function DiffView({
           </div>
         ))}
         {file.hunks.length === 0 && (
-          <p className="px-4 py-3 text-muted-foreground">No textual changes.</p>
+          <p className="px-4 py-3 text-muted-foreground">{t("diff.noTextChanges")}</p>
         )}
       </div>
     );
@@ -1710,7 +1726,7 @@ function DiffView({
         </div>
       ))}
       {file.hunks.length === 0 && (
-        <p className="px-4 py-3 text-muted-foreground">No textual changes.</p>
+        <p className="px-4 py-3 text-muted-foreground">{t("diff.noTextChanges")}</p>
       )}
     </div>
   );
@@ -1775,18 +1791,19 @@ function CommentCard({
   onResolve: () => void;
   onReply: () => void;
 }) {
+  const { t } = useTranslation("changeDetail");
   return (
     <div className="flex min-w-max gap-2 border-b bg-amber-50/70 px-14 py-2 last:border-b-0 dark:bg-amber-950/20">
       <div className="min-w-0 flex-1 font-sans">
         <div className="flex flex-wrap items-center gap-1.5 text-xs">
           <span className="font-semibold">{comment.author.name}</span>
           <span className="text-muted-foreground">
-            · PS {comment.patch_set} · {timeAgo(comment.updated)}
+            · {t("ps", { ps: comment.patch_set })} · {timeAgo(comment.updated)}
           </span>
           {comment.in_reply_to ? (
-            <Badge variant="muted" className="text-[10px]">reply</Badge>
+            <Badge variant="muted" className="text-[10px]">{t("comments.replyBadge")}</Badge>
           ) : comment.resolved ? (
-            <Badge variant="success" className="gap-1 text-[10px]"><Check className="size-3" /> resolved</Badge>
+            <Badge variant="success" className="gap-1 text-[10px]"><Check className="size-3" /> {t("comments.resolved")}</Badge>
           ) : null}
         </div>
         <p className={cn("whitespace-pre-wrap text-xs text-muted-foreground", comment.resolved && "opacity-60 line-through")}>
@@ -1799,7 +1816,7 @@ function CommentCard({
             disabled={busy}
           >
             <Check className="size-3" />
-            {comment.resolved ? "Unresolve" : "Resolve"}
+            {comment.resolved ? t("comments.unresolve") : t("comments.resolve")}
           </button>
           {canComment && (
             <button
@@ -1807,7 +1824,7 @@ function CommentCard({
               onClick={onReply}
             >
               <CornerDownRight className="size-3" />
-              Reply
+              {t("comments.reply")}
             </button>
           )}
         </div>
@@ -1827,27 +1844,28 @@ function DraftCard({
   onEdit: () => void;
   onDelete: () => void;
 }) {
+  const { t } = useTranslation("changeDetail");
   return (
     <div className="flex min-w-max gap-2 border-b bg-sky-50/70 px-14 py-2 last:border-b-0 dark:bg-sky-950/20">
       <div className="min-w-0 flex-1 font-sans">
         <div className="flex items-center gap-1.5 text-xs">
           <Badge variant="secondary" className="gap-1 text-[10px]">
-            <Pencil className="size-3" /> Draft
+            <Pencil className="size-3" /> {t("drafts.badge")}
           </Badge>
-          {draft.in_reply_to ? <Badge variant="muted" className="text-[10px]">reply</Badge> : null}
+          {draft.in_reply_to ? <Badge variant="muted" className="text-[10px]">{t("comments.replyBadge")}</Badge> : null}
           <span className="text-muted-foreground">{timeAgo(draft.updated)}</span>
         </div>
         <p className="whitespace-pre-wrap text-xs text-muted-foreground">{draft.message}</p>
         <div className="mt-1 flex items-center gap-3 text-[11px]">
           <button className="flex items-center gap-1 text-muted-foreground hover:text-foreground" onClick={onEdit}>
-            <Pencil className="size-3" /> Edit
+            <Pencil className="size-3" /> {t("common:action.edit")}
           </button>
           <button
             className="flex items-center gap-1 text-muted-foreground hover:text-destructive disabled:opacity-50"
             onClick={onDelete}
             disabled={busy}
           >
-            <Trash2 className="size-3" /> Discard
+            <Trash2 className="size-3" /> {t("drafts.discard")}
           </button>
         </div>
       </div>
@@ -1868,13 +1886,18 @@ function CommentEditor({
   onCancel: () => void;
   onSave: () => void;
 }) {
+  const { t } = useTranslation("changeDetail");
   return (
     <div className="border-y bg-muted/40 px-14 py-2" onClick={(e) => e.stopPropagation()}>
       <Textarea
         autoFocus
         value={editor.message}
         onChange={(e) => onChange(e.target.value)}
-        placeholder={editor.inReplyTo ? "Write a reply…" : `Draft a comment on line ${editor.line}…`}
+        placeholder={
+          editor.inReplyTo
+            ? t("placeholder.reply")
+            : t("placeholder.commentLine", { line: editor.line })
+        }
         className="min-h-14 font-sans text-xs"
         onKeyDown={(e) => {
           if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) onSave();
@@ -1883,14 +1906,14 @@ function CommentEditor({
       />
       <div className="mt-1.5 flex items-center justify-end gap-2">
         <span className="mr-auto font-sans text-[11px] text-muted-foreground">
-          Saved as a draft and published with your review.
+          {t("editor.hint")}
         </span>
         <Button size="sm" variant="ghost" onClick={onCancel}>
-          Cancel
+          {t("common:action.cancel")}
         </Button>
         <Button size="sm" disabled={busy || !editor.message.trim()} onClick={onSave}>
           <Send className="size-3.5" />
-          Save draft
+          {t("editor.saveDraft")}
         </Button>
       </div>
     </div>
@@ -1906,6 +1929,7 @@ function ReviewDialog({
   draftCount: number;
   onDone: (msg: string) => Promise<void>;
 }) {
+  const { t } = useTranslation("changeDetail");
   const [open, setOpen] = useState(false);
   const [cr, setCr] = useState(0);
   const [verified, setVerified] = useState(0);
@@ -1925,7 +1949,7 @@ function ReviewDialog({
       setCr(0);
       setVerified(0);
       setMessage("");
-      await onDone("Review saved");
+      await onDone(t("review.saved"));
     } catch (err) {
       setError((err as Error).message);
     } finally {
@@ -1938,7 +1962,7 @@ function ReviewDialog({
       <DialogTrigger asChild>
         <Button size="sm">
           <VoteChipIcon />
-          Review
+          {t("review.button")}
           {draftCount > 0 && (
             <Badge variant="secondary" className="ml-1 px-1.5 text-[10px]">
               {draftCount}
@@ -1948,15 +1972,15 @@ function ReviewDialog({
       </DialogTrigger>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
-          <DialogTitle>Review change {num}</DialogTitle>
+          <DialogTitle>{t("review.title", { num })}</DialogTitle>
           <DialogDescription>
-            Vote on labels and optionally leave a cover message.
+            {t("review.description")}
           </DialogDescription>
         </DialogHeader>
         <div className="flex flex-col gap-4">
           {draftCount > 0 && (
             <p className="rounded-md bg-muted px-3 py-2 text-xs text-muted-foreground">
-              {draftCount} draft comment{draftCount > 1 ? "s" : ""} will be published with this review.
+              {t("review.draftsPublish", { count: draftCount })}
             </p>
           )}
           <VoteRow label="Code-Review" value={cr} onChange={setCr} options={[-2, -1, 0, 1, 2]} />
@@ -1964,17 +1988,17 @@ function ReviewDialog({
           <Textarea
             value={message}
             onChange={(e) => setMessage(e.target.value)}
-            placeholder="Cover message (optional)"
+            placeholder={t("placeholder.coverMessage")}
             rows={3}
           />
           {error && <p className="text-sm text-destructive">{error}</p>}
         </div>
         <DialogFooter>
           <Button variant="ghost" onClick={() => setOpen(false)}>
-            Cancel
+            {t("common:action.cancel")}
           </Button>
           <Button onClick={submit} disabled={busy}>
-            {busy ? "Sending…" : "Send review"}
+            {busy ? t("review.sending") : t("review.send")}
           </Button>
         </DialogFooter>
       </DialogContent>

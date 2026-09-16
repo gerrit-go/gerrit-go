@@ -17,6 +17,7 @@ import (
 
 	"gerrit-go/internal/auth"
 	"gerrit-go/internal/gitsvc"
+	"gerrit-go/internal/i18n"
 	"gerrit-go/internal/metrics"
 	"gerrit-go/internal/notify"
 	"gerrit-go/internal/store"
@@ -40,7 +41,7 @@ func NewRouter(db *store.DB, authSvc *auth.Service, gitSvc *gitsvc.Service, noti
 	hook.SetCounters(reg.IncWebhookSent, reg.IncWebhookFail)
 	s := &Server{db: db, auth: authSvc, git: gitSvc, notify: notifier, hook: hook, metrics: reg, static: staticDir, mux: http.NewServeMux()}
 	s.routes()
-	return s
+	return i18n.Middleware(s)
 }
 
 func (s *Server) routes() {
@@ -167,7 +168,7 @@ func (s *Server) routes() {
 	mux.Handle("/a/", http.StripPrefix("/a", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		acct, err := s.auth.CurrentAccount(r)
 		if err != nil {
-			writeErr(w, http.StatusUnauthorized, "authentication required")
+			writeErr(w, http.StatusUnauthorized, i18n.T(i18n.LangFrom(r.Context()), "err.authRequired"))
 			return
 		}
 		s.mux.ServeHTTP(w, r.WithContext(withAccount(r.Context(), acct)))
@@ -203,7 +204,7 @@ func (s *Server) requireAuth(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		acct, err := s.auth.CurrentAccount(r)
 		if err != nil {
-			writeErr(w, http.StatusUnauthorized, "authentication required")
+			writeErr(w, http.StatusUnauthorized, i18n.T(i18n.LangFrom(r.Context()), "err.authRequired"))
 			return
 		}
 		r = r.WithContext(withAccount(r.Context(), acct))
@@ -228,9 +229,9 @@ func (s *Server) optionalAccount(r *http.Request) *store.Account {
 	return nil
 }
 
-// forbid writes a 403 and reports false so callers can `return` early.
-func forbid(w http.ResponseWriter, perm string) bool {
-	writeErr(w, http.StatusForbidden, "permission denied: "+perm)
+// forbid writes a localized 403 and reports false so callers can `return` early.
+func (s *Server) forbid(w http.ResponseWriter, r *http.Request, perm string) bool {
+	writeErr(w, http.StatusForbidden, i18n.T(i18n.LangFrom(r.Context()), "err.forbidden", perm))
 	return false
 }
 
@@ -238,7 +239,7 @@ func forbid(w http.ResponseWriter, perm string) bool {
 // writes a 404 (to avoid leaking existence) and returns false.
 func (s *Server) ensureChangeRead(w http.ResponseWriter, r *http.Request, c *store.Change) bool {
 	if !s.canReadChange(s.optionalAccount(r), c) {
-		writeErr(w, http.StatusNotFound, "change not found")
+		writeErr(w, http.StatusNotFound, i18n.T(i18n.LangFrom(r.Context()), "err.changeNotFound"))
 		return false
 	}
 	return true
@@ -252,7 +253,7 @@ func (s *Server) canReadProject(acct *store.Account, project string) bool {
 
 func (s *Server) ensureProjectRead(w http.ResponseWriter, r *http.Request, project string) bool {
 	if !s.canReadProject(s.optionalAccount(r), project) {
-		writeErr(w, http.StatusNotFound, "project not found")
+		writeErr(w, http.StatusNotFound, i18n.T(i18n.LangFrom(r.Context()), "err.projectNotFound"))
 		return false
 	}
 	return true
@@ -267,17 +268,18 @@ func decodeJSON(r *http.Request, v any) error {
 // ---------- auth handlers ----------
 
 func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
+	lang := i18n.LangFrom(r.Context())
 	var req struct {
 		Username string `json:"username"`
 		Password string `json:"password"`
 	}
 	if err := decodeJSON(r, &req); err != nil {
-		writeErr(w, http.StatusBadRequest, "invalid request body")
+		writeErr(w, http.StatusBadRequest, i18n.T(lang, "err.invalidBody"))
 		return
 	}
 	acct, err := s.auth.Authenticate(req.Username, req.Password)
 	if err != nil {
-		writeErr(w, http.StatusUnauthorized, "invalid username or password")
+		writeErr(w, http.StatusUnauthorized, i18n.T(lang, "err.invalidCredentials"))
 		return
 	}
 	id, err := s.auth.CreateSession(acct.ID)
@@ -515,7 +517,7 @@ func (s *Server) handleListProjects(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleCreateProject(w http.ResponseWriter, r *http.Request) {
 	acct := s.account(r)
 	if !s.canCapability(acct, PermCreateProject) {
-		forbid(w, PermCreateProject)
+		s.forbid(w, r, PermCreateProject)
 		return
 	}
 	var req struct {
@@ -1012,6 +1014,7 @@ func (s *Server) handleListComments(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleReview(w http.ResponseWriter, r *http.Request) {
 	acct := s.account(r)
+	lang := i18n.LangFrom(r.Context())
 	num, ok := s.parseChangeNum(r)
 	if !ok {
 		writeErr(w, http.StatusBadRequest, "invalid change number")
@@ -1043,7 +1046,7 @@ func (s *Server) handleReview(w http.ResponseWriter, r *http.Request) {
 	// Posting a cover message or inline comments requires the comment right.
 	if strings.TrimSpace(req.Message) != "" || len(req.Comments) > 0 {
 		if !s.can(acct, c.Project, ref, PermComment) {
-			forbid(w, PermComment)
+			s.forbid(w, r, PermComment)
 			return
 		}
 	}
@@ -1055,7 +1058,7 @@ func (s *Server) handleReview(w http.ResponseWriter, r *http.Request) {
 	for label, value := range req.Labels {
 		acc := s.checkAccess(acct, c.Project, ref, "label-"+label)
 		if !acc.allowed {
-			forbid(w, "label-"+label)
+			s.forbid(w, r, "label-"+label)
 			return
 		}
 		if value < acc.min || value > acc.max {
@@ -1110,24 +1113,25 @@ func (s *Server) handleReview(w http.ResponseWriter, r *http.Request) {
 
 	s.db.TouchChange(c.Number)
 
-	evType, summary := "review", "left a review"
+	votes := strings.Join(voteTokens, ", ")
+	evType, summary := "review", i18n.T(lang, "msg.sumLeftReview")
 	if strings.TrimSpace(req.Message) != "" {
 		evType, summary = "comment", strings.TrimSpace(req.Message)
 	} else if len(voteTokens) > 0 {
-		summary = "voted " + strings.Join(voteTokens, ", ")
+		summary = i18n.T(lang, "msg.sumVoted", votes)
 	}
 	if published > 0 || len(req.Comments) > 0 {
 		evType = "comment"
 		if strings.TrimSpace(req.Message) == "" {
-			summary = "left inline comments"
+			summary = i18n.T(lang, "msg.sumInlineComments")
 			if len(voteTokens) > 0 {
-				summary = "voted " + strings.Join(voteTokens, ", ") + " and left inline comments"
+				summary = i18n.T(lang, "msg.sumVotedAndComments", votes)
 			}
 		}
 	}
 	s.notifyChange(c, acct.ID, notify.Event{
-		Type: evType, Message: acct.FullName + " " + summary + " on patch set " +
-			strconv.Itoa(c.CurrentPS) + ".",
+		Type: evType, Lang: lang,
+		Message:     i18n.T(lang, "msg.reviewNotify", acct.FullName, summary, c.CurrentPS),
 		NotifyOwner: true, IncludeReviewers: true,
 	})
 
@@ -1136,6 +1140,7 @@ func (s *Server) handleReview(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleSubmit(w http.ResponseWriter, r *http.Request) {
 	acct := s.account(r)
+	lang := i18n.LangFrom(r.Context())
 	num, ok := s.parseChangeNum(r)
 	if !ok {
 		writeErr(w, http.StatusBadRequest, "invalid change number")
@@ -1154,7 +1159,7 @@ func (s *Server) handleSubmit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !s.can(acct, c.Project, branchRef(c.Branch), PermSubmit) {
-		forbid(w, PermSubmit)
+		s.forbid(w, r, PermSubmit)
 		return
 	}
 
@@ -1193,7 +1198,7 @@ func (s *Server) handleSubmit(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if !s.can(acct, b.Project, branchRef(b.Branch), PermSubmit) {
-			forbid(w, PermSubmit)
+			s.forbid(w, r, PermSubmit)
 			return
 		}
 	}
@@ -1216,11 +1221,12 @@ func (s *Server) handleSubmit(w http.ResponseWriter, r *http.Request) {
 			}
 			s.db.AddChangeMessage(&store.ChangeMessage{
 				ChangeNum: b.Number, PatchSet: b.CurrentPS, Type: "submitted",
-				AuthorID: acct.ID, Message: fmt.Sprintf("Change merged via %s, commit %s.", strategy, shortSHA(sha)),
+				AuthorID: acct.ID, Message: i18n.T(lang, "msg.merged", strategy, shortSHA(sha)),
 			})
 			s.notifyChange(b, acct.ID, notify.Event{
 				Type:             "submitted",
-				Message:          acct.FullName + " submitted this change (" + strategy + ", commit " + shortSHA(sha) + ").",
+				Lang:             lang,
+				Message:          i18n.T(lang, "msg.submittedNotify", acct.FullName, strategy, shortSHA(sha)),
 				NotifyOwner:      true,
 				IncludeReviewers: true,
 			})
@@ -1285,6 +1291,7 @@ func (s *Server) recordPatchSet(changeNumber int64, acct *store.Account, nc gits
 
 func (s *Server) handleRebase(w http.ResponseWriter, r *http.Request) {
 	acct := s.account(r)
+	lang := i18n.LangFrom(r.Context())
 	num, ok := s.parseChangeNum(r)
 	if !ok {
 		writeErr(w, http.StatusBadRequest, "invalid change number")
@@ -1303,7 +1310,7 @@ func (s *Server) handleRebase(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !s.canUploadPatchSet(acct, c) {
-		forbid(w, PermPush)
+		s.forbid(w, r, PermPush)
 		return
 	}
 	nc, err := s.git.Rebase(c.Number)
@@ -1312,7 +1319,7 @@ func (s *Server) handleRebase(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.recordPatchSet(c.Number, acct, nc,
-		fmt.Sprintf("Uploaded patch set %d (rebased onto %s).", nc.NewPatchSet, c.Branch)); err != nil {
+		i18n.T(lang, "msg.psRebased", nc.NewPatchSet, c.Branch)); err != nil {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -1341,6 +1348,7 @@ func (s *Server) abandonOrphan(number int64) {
 
 func (s *Server) handleCherryPick(w http.ResponseWriter, r *http.Request) {
 	acct := s.account(r)
+	lang := i18n.LangFrom(r.Context())
 	num, ok := s.parseChangeNum(r)
 	if !ok {
 		writeErr(w, http.StatusBadRequest, "invalid change number")
@@ -1363,7 +1371,7 @@ func (s *Server) handleCherryPick(w http.ResponseWriter, r *http.Request) {
 	}
 	target := strings.TrimSpace(req.Destination)
 	if !s.can(acct, c.Project, "refs/for/"+target, PermPush) {
-		forbid(w, PermPush)
+		s.forbid(w, r, PermPush)
 		return
 	}
 
@@ -1379,13 +1387,13 @@ func (s *Server) handleCherryPick(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.recordPatchSet(newChange.Number, acct, nc,
-		fmt.Sprintf("Uploaded patch set %d (cherry-picked from change %d).", nc.NewPatchSet, c.Number)); err != nil {
+		i18n.T(lang, "msg.psCherryPicked", nc.NewPatchSet, c.Number)); err != nil {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	s.db.AddChangeMessage(&store.ChangeMessage{
 		ChangeNum: newChange.Number, Type: "comment", AuthorID: acct.ID,
-		Message: fmt.Sprintf("Cherry-picked from change %d.", c.Number),
+		Message: i18n.T(lang, "msg.cherryPickedFrom", c.Number),
 	})
 	if created, err := s.db.GetChange(newChange.Number); err == nil {
 		writeJSON(w, http.StatusOK, changeInfo(created))
@@ -1396,6 +1404,7 @@ func (s *Server) handleCherryPick(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleRevert(w http.ResponseWriter, r *http.Request) {
 	acct := s.account(r)
+	lang := i18n.LangFrom(r.Context())
 	num, ok := s.parseChangeNum(r)
 	if !ok {
 		writeErr(w, http.StatusBadRequest, "invalid change number")
@@ -1414,7 +1423,7 @@ func (s *Server) handleRevert(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !s.can(acct, c.Project, "refs/for/"+c.Branch, PermPush) {
-		forbid(w, PermPush)
+		s.forbid(w, r, PermPush)
 		return
 	}
 
@@ -1430,13 +1439,13 @@ func (s *Server) handleRevert(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.recordPatchSet(newChange.Number, acct, nc,
-		fmt.Sprintf("Uploaded patch set %d (revert of change %d).", nc.NewPatchSet, c.Number)); err != nil {
+		i18n.T(lang, "msg.psRevert", nc.NewPatchSet, c.Number)); err != nil {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	s.db.AddChangeMessage(&store.ChangeMessage{
 		ChangeNum: newChange.Number, Type: "comment", AuthorID: acct.ID,
-		Message: fmt.Sprintf("Reverts change %d.", c.Number),
+		Message: i18n.T(lang, "msg.reverts", c.Number),
 	})
 	if created, err := s.db.GetChange(newChange.Number); err == nil {
 		writeJSON(w, http.StatusOK, changeInfo(created))
@@ -1451,6 +1460,7 @@ func (s *Server) handleRestore(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) setChangeStatus(w http.ResponseWriter, r *http.Request, to, requireFrom string) {
 	acct := s.account(r)
+	lang := i18n.LangFrom(r.Context())
 	num, ok := s.parseChangeNum(r)
 	if !ok {
 		writeErr(w, http.StatusBadRequest, "invalid change number")
@@ -1469,24 +1479,25 @@ func (s *Server) setChangeStatus(w http.ResponseWriter, r *http.Request, to, req
 		return
 	}
 	if !s.can(acct, c.Project, branchRef(c.Branch), PermAbandon) {
-		forbid(w, PermAbandon)
+		s.forbid(w, r, PermAbandon)
 		return
 	}
 	if err := s.db.UpdateChangeStatus(c.Number, to, nil); err != nil {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	msgType, msgText := "restored", "Change restored."
+	msgType, msgKey, notifyKey := "restored", "msg.restored", "msg.restoredNotify"
 	if to == "ABANDONED" {
-		msgType, msgText = "abandoned", "Change abandoned."
+		msgType, msgKey, notifyKey = "abandoned", "msg.abandoned", "msg.abandonedNotify"
 	}
 	s.db.AddChangeMessage(&store.ChangeMessage{
 		ChangeNum: c.Number, PatchSet: c.CurrentPS, Type: msgType,
-		AuthorID: acct.ID, Message: msgText,
+		AuthorID: acct.ID, Message: i18n.T(lang, msgKey),
 	})
 	s.notifyChange(c, acct.ID, notify.Event{
 		Type:             msgType,
-		Message:          acct.FullName + " " + strings.ToLower(msgText),
+		Lang:             lang,
+		Message:          i18n.T(lang, notifyKey, acct.FullName),
 		NotifyOwner:      true,
 		IncludeReviewers: true,
 	})
@@ -1549,6 +1560,7 @@ func (s *Server) resolveAccount(ident string) (*store.Account, error) {
 
 func (s *Server) handleAddReviewer(w http.ResponseWriter, r *http.Request) {
 	acct := s.account(r)
+	lang := i18n.LangFrom(r.Context())
 	num, ok := s.parseChangeNum(r)
 	if !ok {
 		writeErr(w, http.StatusBadRequest, "invalid change number")
@@ -1563,7 +1575,7 @@ func (s *Server) handleAddReviewer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if c.OwnerID != acct.ID && !s.can(acct, c.Project, branchRef(c.Branch), PermComment) {
-		forbid(w, PermAddReviewer)
+		s.forbid(w, r, PermAddReviewer)
 		return
 	}
 	var req struct {
@@ -1584,12 +1596,13 @@ func (s *Server) handleAddReviewer(w http.ResponseWriter, r *http.Request) {
 	}
 	s.db.AddChangeMessage(&store.ChangeMessage{
 		ChangeNum: c.Number, Type: "reviewer-added", AuthorID: acct.ID,
-		Message: fmt.Sprintf("Added reviewer %s.", orDefault(target.FullName, target.Username)),
+		Message: i18n.T(lang, "msg.reviewerAdded", orDefault(target.FullName, target.Username)),
 	})
 	s.db.TouchChange(c.Number)
 	s.notifyChange(c, acct.ID, notify.Event{
 		Type:            "reviewer-added",
-		Message:         acct.FullName + " added you as a reviewer.",
+		Lang:            lang,
+		Message:         i18n.T(lang, "msg.reviewerAddedNotify", acct.FullName),
 		ExtraRecipients: []int64{target.ID},
 	})
 	writeJSON(w, http.StatusOK, s.reviewersFor(c.Number))
@@ -1597,6 +1610,7 @@ func (s *Server) handleAddReviewer(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleDeleteReviewer(w http.ResponseWriter, r *http.Request) {
 	acct := s.account(r)
+	lang := i18n.LangFrom(r.Context())
 	num, ok := s.parseChangeNum(r)
 	if !ok {
 		writeErr(w, http.StatusBadRequest, "invalid change number")
@@ -1611,7 +1625,7 @@ func (s *Server) handleDeleteReviewer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if c.OwnerID != acct.ID && !s.can(acct, c.Project, branchRef(c.Branch), PermComment) {
-		forbid(w, PermAddReviewer)
+		s.forbid(w, r, PermAddReviewer)
 		return
 	}
 	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
@@ -1633,7 +1647,7 @@ func (s *Server) handleDeleteReviewer(w http.ResponseWriter, r *http.Request) {
 	}
 	s.db.AddChangeMessage(&store.ChangeMessage{
 		ChangeNum: c.Number, Type: "reviewer-removed", AuthorID: acct.ID,
-		Message: fmt.Sprintf("Removed reviewer %s.", name),
+		Message: i18n.T(lang, "msg.reviewerRemoved", name),
 	})
 	s.db.TouchChange(c.Number)
 	writeJSON(w, http.StatusOK, s.reviewersFor(c.Number))
@@ -1641,6 +1655,7 @@ func (s *Server) handleDeleteReviewer(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleSetTopic(w http.ResponseWriter, r *http.Request) {
 	acct := s.account(r)
+	lang := i18n.LangFrom(r.Context())
 	num, ok := s.parseChangeNum(r)
 	if !ok {
 		writeErr(w, http.StatusBadRequest, "invalid change number")
@@ -1655,7 +1670,7 @@ func (s *Server) handleSetTopic(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !s.can(acct, c.Project, branchRef(c.Branch), PermEditTopic) {
-		forbid(w, PermEditTopic)
+		s.forbid(w, r, PermEditTopic)
 		return
 	}
 	var req struct {
@@ -1670,9 +1685,9 @@ func (s *Server) handleSetTopic(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	msg := "Topic cleared."
+	msg := i18n.T(lang, "msg.topicCleared")
 	if topic != "" {
-		msg = fmt.Sprintf("Topic set to %s.", topic)
+		msg = i18n.T(lang, "msg.topicSet", topic)
 	}
 	s.db.AddChangeMessage(&store.ChangeMessage{
 		ChangeNum: c.Number, Type: "topic", AuthorID: acct.ID, Message: msg,
@@ -1682,6 +1697,7 @@ func (s *Server) handleSetTopic(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleDeleteTopic(w http.ResponseWriter, r *http.Request) {
 	acct := s.account(r)
+	lang := i18n.LangFrom(r.Context())
 	num, ok := s.parseChangeNum(r)
 	if !ok {
 		writeErr(w, http.StatusBadRequest, "invalid change number")
@@ -1696,7 +1712,7 @@ func (s *Server) handleDeleteTopic(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !s.can(acct, c.Project, branchRef(c.Branch), PermEditTopic) {
-		forbid(w, PermEditTopic)
+		s.forbid(w, r, PermEditTopic)
 		return
 	}
 	if err := s.db.SetTopic(c.Number, ""); err != nil {
@@ -1704,13 +1720,14 @@ func (s *Server) handleDeleteTopic(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.db.AddChangeMessage(&store.ChangeMessage{
-		ChangeNum: c.Number, Type: "topic", AuthorID: acct.ID, Message: "Topic cleared.",
+		ChangeNum: c.Number, Type: "topic", AuthorID: acct.ID, Message: i18n.T(lang, "msg.topicCleared"),
 	})
 	writeJSON(w, http.StatusOK, nil)
 }
 
 func (s *Server) setWIP(w http.ResponseWriter, r *http.Request, wip bool) {
 	acct := s.account(r)
+	lang := i18n.LangFrom(r.Context())
 	num, ok := s.parseChangeNum(r)
 	if !ok {
 		writeErr(w, http.StatusBadRequest, "invalid change number")
@@ -1725,16 +1742,16 @@ func (s *Server) setWIP(w http.ResponseWriter, r *http.Request, wip bool) {
 		return
 	}
 	if c.OwnerID != acct.ID && !s.can(acct, c.Project, branchRef(c.Branch), PermEditTopic) {
-		forbid(w, "wip")
+		s.forbid(w, r, "wip")
 		return
 	}
 	if err := s.db.SetWorkInProgress(c.Number, wip); err != nil {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	msg := "Change marked ready for review."
+	msg := i18n.T(lang, "msg.readyForReview")
 	if wip {
-		msg = "Change marked work-in-progress."
+		msg = i18n.T(lang, "msg.wip")
 	}
 	s.db.AddChangeMessage(&store.ChangeMessage{
 		ChangeNum: c.Number, Type: "wip", AuthorID: acct.ID, Message: msg,

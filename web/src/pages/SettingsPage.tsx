@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import { useTranslation } from "react-i18next";
 import { Copy, KeyRound, Plus, ShieldCheck, Trash2, User } from "lucide-react";
 import { api, type AccountInfo, type SSHKeyInfo } from "@/lib/api";
 import { useAuth } from "@/auth";
@@ -14,6 +15,7 @@ import { timeAgo } from "@/lib/utils";
 
 export default function SettingsPage() {
   const { user, loading } = useAuth();
+  const { t } = useTranslation("settings");
   const navigate = useNavigate();
 
   useEffect(() => {
@@ -24,7 +26,7 @@ export default function SettingsPage() {
 
   return (
     <div className="flex flex-col gap-4">
-      <h1 className="text-xl font-semibold">Settings</h1>
+      <h1 className="text-xl font-semibold">{t("common:action.settings")}</h1>
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
         <ProfileCard user={user} />
         <PasswordCard />
@@ -38,6 +40,7 @@ export default function SettingsPage() {
 
 function ProfileCard({ user }: { user: AccountInfo }) {
   const { refresh } = useAuth();
+  const { t } = useTranslation("settings");
   const [name, setName] = useState(user.name ?? "");
   const [email, setEmail] = useState(user.email ?? "");
   const [busy, setBusy] = useState(false);
@@ -52,7 +55,7 @@ function ProfileCard({ user }: { user: AccountInfo }) {
     try {
       await api.updateSelf({ name, email });
       await refresh();
-      setMsg("Profile updated");
+      setMsg(t("profile.updated"));
     } catch (err) {
       setError((err as Error).message);
     } finally {
@@ -65,20 +68,20 @@ function ProfileCard({ user }: { user: AccountInfo }) {
       <CardHeader>
         <CardTitle className="flex items-center gap-2 text-base">
           <User className="size-4 text-muted-foreground" />
-          Profile
+          {t("profile.title")}
         </CardTitle>
         <CardDescription>
-          Signed in as <span className="font-mono">@{user.username}</span>
+          {t("profile.signedInAs")} <span className="font-mono">@{user.username}</span>
         </CardDescription>
       </CardHeader>
       <CardContent>
         <form onSubmit={save} className="flex flex-col gap-3">
           <div className="flex flex-col gap-2">
-            <Label htmlFor="profile-name">Full name</Label>
+            <Label htmlFor="profile-name">{t("profile.fullName")}</Label>
             <Input id="profile-name" value={name} onChange={(e) => setName(e.target.value)} />
           </div>
           <div className="flex flex-col gap-2">
-            <Label htmlFor="profile-email">Email</Label>
+            <Label htmlFor="profile-email">{t("profile.email")}</Label>
             <Input
               id="profile-email"
               type="email"
@@ -89,7 +92,7 @@ function ProfileCard({ user }: { user: AccountInfo }) {
           {error && <p className="text-sm text-destructive">{error}</p>}
           {msg && <p className="text-sm text-emerald-600 dark:text-emerald-400">{msg}</p>}
           <Button type="submit" disabled={busy} className="self-start">
-            {busy ? "Saving…" : "Save profile"}
+            {busy ? t("common:action.saving") : t("profile.save")}
           </Button>
         </form>
       </CardContent>
@@ -98,6 +101,7 @@ function ProfileCard({ user }: { user: AccountInfo }) {
 }
 
 function PasswordCard() {
+  const { t } = useTranslation("settings");
   const [oldPass, setOldPass] = useState("");
   const [newPass, setNewPass] = useState("");
   const [confirm, setConfirm] = useState("");
@@ -110,7 +114,7 @@ function PasswordCard() {
     setMsg("");
     setError("");
     if (newPass !== confirm) {
-      setError("New passwords do not match");
+      setError(t("password.mismatch"));
       return;
     }
     setBusy(true);
@@ -119,7 +123,7 @@ function PasswordCard() {
       setOldPass("");
       setNewPass("");
       setConfirm("");
-      setMsg("Password changed");
+      setMsg(t("password.changed"));
     } catch (err) {
       setError((err as Error).message);
     } finally {
@@ -132,14 +136,14 @@ function PasswordCard() {
       <CardHeader>
         <CardTitle className="flex items-center gap-2 text-base">
           <ShieldCheck className="size-4 text-muted-foreground" />
-          Login password
+          {t("password.title")}
         </CardTitle>
-        <CardDescription>Used to sign in to the web UI.</CardDescription>
+        <CardDescription>{t("password.description")}</CardDescription>
       </CardHeader>
       <CardContent>
         <form onSubmit={save} className="flex flex-col gap-3">
           <div className="flex flex-col gap-2">
-            <Label htmlFor="cur-pass">Current password</Label>
+            <Label htmlFor="cur-pass">{t("password.current")}</Label>
             <Input
               id="cur-pass"
               type="password"
@@ -150,7 +154,7 @@ function PasswordCard() {
             />
           </div>
           <div className="flex flex-col gap-2">
-            <Label htmlFor="new-pass">New password</Label>
+            <Label htmlFor="new-pass">{t("password.new")}</Label>
             <Input
               id="new-pass"
               type="password"
@@ -161,7 +165,7 @@ function PasswordCard() {
             />
           </div>
           <div className="flex flex-col gap-2">
-            <Label htmlFor="confirm-pass">Confirm new password</Label>
+            <Label htmlFor="confirm-pass">{t("password.confirm")}</Label>
             <Input
               id="confirm-pass"
               type="password"
@@ -174,7 +178,7 @@ function PasswordCard() {
           {error && <p className="text-sm text-destructive">{error}</p>}
           {msg && <p className="text-sm text-emerald-600 dark:text-emerald-400">{msg}</p>}
           <Button type="submit" disabled={busy} className="self-start">
-            {busy ? "Updating…" : "Change password"}
+            {busy ? t("password.updating") : t("password.change")}
           </Button>
         </form>
       </CardContent>
@@ -183,6 +187,7 @@ function PasswordCard() {
 }
 
 function HTTPPasswordCard() {
+  const { t } = useTranslation("settings");
   const [enabled, setEnabled] = useState<boolean | null>(null);
   const [secret, setSecret] = useState("");
   const [busy, setBusy] = useState(false);
@@ -239,34 +244,32 @@ function HTTPPasswordCard() {
       <CardHeader>
         <CardTitle className="flex items-center gap-2 text-base">
           <KeyRound className="size-4 text-muted-foreground" />
-          HTTP password
+          {t("httpPassword.title")}
         </CardTitle>
         <CardDescription>
-          Credential for git over HTTP and the <code className="font-mono">/a/</code> REST API
-          (HTTP basic auth).
+          {t("httpPassword.descriptionPrefix")} <code className="font-mono">/a/</code>{" "}
+          {t("httpPassword.descriptionSuffix")}
         </CardDescription>
       </CardHeader>
       <CardContent className="flex flex-col gap-3">
         <div className="flex items-center gap-2 text-sm">
-          <span className="text-muted-foreground">Status:</span>
+          <span className="text-muted-foreground">{t("httpPassword.status")}</span>
           {enabled === null ? (
-            <span className="text-muted-foreground">loading…</span>
+            <span className="text-muted-foreground">{t("common:common.loading")}</span>
           ) : enabled ? (
-            <Badge variant="success">Enabled</Badge>
+            <Badge variant="success">{t("httpPassword.enabled")}</Badge>
           ) : (
-            <Badge variant="muted">Not set</Badge>
+            <Badge variant="muted">{t("httpPassword.notSet")}</Badge>
           )}
         </div>
         {secret && (
           <div className="flex flex-col gap-2 rounded-md border bg-muted/40 p-3">
-            <p className="text-xs text-muted-foreground">
-              Copy this now — it is shown only once and stored hashed.
-            </p>
+            <p className="text-xs text-muted-foreground">{t("httpPassword.copyWarning")}</p>
             <div className="flex items-center gap-2">
               <code className="flex-1 break-all font-mono text-sm">{secret}</code>
               <Button variant="outline" size="sm" onClick={copy}>
                 <Copy className="size-4" />
-                {copied ? "Copied" : "Copy"}
+                {copied ? t("common:action.copied") : t("common:action.copy")}
               </Button>
             </div>
           </div>
@@ -274,12 +277,12 @@ function HTTPPasswordCard() {
         {error && <p className="text-sm text-destructive">{error}</p>}
         <div className="flex gap-2">
           <Button onClick={generate} disabled={busy} variant={enabled ? "outline" : "default"}>
-            {enabled ? "Regenerate" : "Generate"}
+            {enabled ? t("httpPassword.regenerate") : t("httpPassword.generate")}
           </Button>
           {enabled && (
             <Button onClick={clear} disabled={busy} variant="ghost">
               <Trash2 className="size-4" />
-              Clear
+              {t("httpPassword.clear")}
             </Button>
           )}
         </div>
@@ -289,6 +292,7 @@ function HTTPPasswordCard() {
 }
 
 function SSHKeysCard() {
+  const { t } = useTranslation("settings");
   const [keys, setKeys] = useState<SSHKeyInfo[] | null>(null);
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
@@ -331,15 +335,15 @@ function SSHKeysCard() {
       <CardHeader>
         <CardTitle className="flex items-center gap-2 text-base">
           <KeyRound className="size-4 text-muted-foreground" />
-          SSH public keys
+          {t("sshKeys.title")}
         </CardTitle>
-        <CardDescription>Register the public keys you use to identify yourself.</CardDescription>
+        <CardDescription>{t("sshKeys.description")}</CardDescription>
       </CardHeader>
       <CardContent className="flex flex-col gap-3">
         {keys === null ? (
-          <p className="text-sm text-muted-foreground">Loading…</p>
+          <p className="text-sm text-muted-foreground">{t("common:common.loading")}</p>
         ) : keys.length === 0 ? (
-          <p className="text-sm text-muted-foreground">No keys registered.</p>
+          <p className="text-sm text-muted-foreground">{t("sshKeys.empty")}</p>
         ) : (
           <ul className="flex flex-col gap-2">
             {keys.map((k) => (
@@ -347,10 +351,11 @@ function SSHKeysCard() {
                 <div className="min-w-0 flex-1">
                   <code className="block truncate font-mono text-xs">{k.public_key}</code>
                   <span className="text-xs text-muted-foreground">
-                    {k.comment || "no comment"} · added {timeAgo(k.created)}
+                    {k.comment || t("sshKeys.noComment")} ·{" "}
+                    {t("sshKeys.added", { time: timeAgo(k.created) })}
                   </span>
                 </div>
-                <Button variant="ghost" size="icon" onClick={() => remove(k.id)} aria-label="Delete key">
+                <Button variant="ghost" size="icon" onClick={() => remove(k.id)} aria-label={t("sshKeys.deleteKey")}>
                   <Trash2 className="size-4" />
                 </Button>
               </li>
@@ -358,7 +363,7 @@ function SSHKeysCard() {
           </ul>
         )}
         <form onSubmit={add} className="flex flex-col gap-2">
-          <Label htmlFor="ssh-key">Add a public key</Label>
+          <Label htmlFor="ssh-key">{t("sshKeys.addLabel")}</Label>
           <Textarea
             id="ssh-key"
             value={input}
@@ -370,7 +375,7 @@ function SSHKeysCard() {
           {error && <p className="text-sm text-destructive">{error}</p>}
           <Button type="submit" disabled={busy || !input.trim()} className="self-start">
             <Plus className="size-4" />
-            Add key
+            {t("sshKeys.add")}
           </Button>
         </form>
       </CardContent>
@@ -379,6 +384,7 @@ function SSHKeysCard() {
 }
 
 function AdminAccountsCard() {
+  const { t } = useTranslation("settings");
   const [accounts, setAccounts] = useState<AccountInfo[] | null>(null);
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
@@ -423,20 +429,20 @@ function AdminAccountsCard() {
       <CardHeader>
         <CardTitle className="flex items-center gap-2 text-base">
           <ShieldCheck className="size-4 text-muted-foreground" />
-          Accounts <Badge variant="outline">admin</Badge>
+          {t("accounts.title")} <Badge variant="outline">{t("accounts.admin")}</Badge>
         </CardTitle>
-        <CardDescription>Create and inspect server accounts.</CardDescription>
+        <CardDescription>{t("accounts.description")}</CardDescription>
       </CardHeader>
       <CardContent className="flex flex-col gap-4">
         <div className="rounded-lg border">
           <Table>
             <TableHeader>
               <TableRow className="hover:bg-transparent">
-                <TableHead className="w-16">ID</TableHead>
-                <TableHead>Username</TableHead>
-                <TableHead>Name</TableHead>
-                <TableHead>Email</TableHead>
-                <TableHead className="w-24">Role</TableHead>
+                <TableHead className="w-16">{t("accounts.id")}</TableHead>
+                <TableHead>{t("accounts.username")}</TableHead>
+                <TableHead>{t("common:common.name")}</TableHead>
+                <TableHead>{t("profile.email")}</TableHead>
+                <TableHead className="w-24">{t("accounts.role")}</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -449,7 +455,7 @@ function AdminAccountsCard() {
                   <TableCell className="text-sm">{a.name}</TableCell>
                   <TableCell className="text-sm text-muted-foreground">{a.email}</TableCell>
                   <TableCell>
-                    {a.admin ? <Badge variant="secondary">admin</Badge> : <Badge variant="muted">user</Badge>}
+                    {a.admin ? <Badge variant="secondary">{t("accounts.admin")}</Badge> : <Badge variant="muted">{t("accounts.user")}</Badge>}
                   </TableCell>
                 </TableRow>
               ))}
@@ -459,11 +465,11 @@ function AdminAccountsCard() {
         <form onSubmit={create} className="flex flex-col gap-3">
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <div className="flex flex-col gap-2">
-              <Label htmlFor="acc-user">Username</Label>
+              <Label htmlFor="acc-user">{t("accounts.username")}</Label>
               <Input id="acc-user" value={username} onChange={(e) => setUsername(e.target.value)} required />
             </div>
             <div className="flex flex-col gap-2">
-              <Label htmlFor="acc-pass">Password</Label>
+              <Label htmlFor="acc-pass">{t("accounts.password")}</Label>
               <Input
                 id="acc-pass"
                 type="password"
@@ -474,18 +480,18 @@ function AdminAccountsCard() {
               />
             </div>
             <div className="flex flex-col gap-2">
-              <Label htmlFor="acc-name">Full name</Label>
+              <Label htmlFor="acc-name">{t("profile.fullName")}</Label>
               <Input id="acc-name" value={name} onChange={(e) => setName(e.target.value)} />
             </div>
             <div className="flex flex-col gap-2">
-              <Label htmlFor="acc-email">Email</Label>
+              <Label htmlFor="acc-email">{t("profile.email")}</Label>
               <Input id="acc-email" type="email" value={email} onChange={(e) => setEmail(e.target.value)} />
             </div>
           </div>
           {error && <p className="text-sm text-destructive">{error}</p>}
           <Button type="submit" disabled={busy} className="self-start">
             <Plus className="size-4" />
-            Create account
+            {t("accounts.create")}
           </Button>
         </form>
       </CardContent>

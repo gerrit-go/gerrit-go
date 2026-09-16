@@ -1,0 +1,7 @@
+export default {
+  newProject: "新建项目",
+  createProject: "创建项目",
+  createDescription: "创建一个由 Gerrit Go 托管的空 Git 仓库。",
+  empty: "还没有项目，创建一个开始吧。",
+  noDescription: "暂无描述",
+};

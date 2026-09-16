@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { Plus, Trash2, Users, X } from "lucide-react";
 import { api, type GroupInfo, type GroupMember } from "@/lib/api";
 import { useAuth } from "@/auth";
@@ -27,6 +28,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 
 export default function GroupsPage() {
   const { user } = useAuth();
+  const { t } = useTranslation("groups");
   const isAdmin = !!user?.admin;
   const [groups, setGroups] = useState<GroupInfo[] | null>(null);
   const [error, setError] = useState("");
@@ -69,7 +71,7 @@ export default function GroupsPage() {
   };
 
   const onDelete = async (g: GroupInfo) => {
-    if (!confirm(`Delete group "${g.name}"?`)) return;
+    if (!confirm(t("deleteConfirm", { name: g.name }))) return;
     try {
       await api.deleteGroup(g.id);
       await load();
@@ -81,7 +83,7 @@ export default function GroupsPage() {
   if (!user) {
     return (
       <div className="rounded-lg border border-dashed p-12 text-center text-muted-foreground">
-        Sign in to view groups.
+        {t("signInToView")}
       </div>
     );
   }
@@ -89,35 +91,35 @@ export default function GroupsPage() {
   return (
     <div className="flex flex-col gap-4">
       <div className="flex items-center gap-3">
-        <h1 className="text-xl font-semibold">Groups</h1>
+        <h1 className="text-xl font-semibold">{t("common:nav.groups")}</h1>
         {isAdmin && (
           <Dialog open={open} onOpenChange={setOpen}>
             <DialogTrigger asChild>
               <Button size="sm" className="ml-auto">
                 <Plus className="size-4" />
-                New group
+                {t("newGroup")}
               </Button>
             </DialogTrigger>
             <DialogContent>
               <DialogHeader>
-                <DialogTitle>Create group</DialogTitle>
+                <DialogTitle>{t("createGroup")}</DialogTitle>
                 <DialogDescription>
-                  Groups are granted permissions in each project's access rules.
+                  {t("createGroupDesc")}
                 </DialogDescription>
               </DialogHeader>
               <form onSubmit={onCreate} className="flex flex-col gap-4">
                 <div className="flex flex-col gap-2">
-                  <Label htmlFor="grp-name">Name</Label>
+                  <Label htmlFor="grp-name">{t("common:common.name")}</Label>
                   <Input
                     id="grp-name"
                     value={name}
                     onChange={(e) => setName(e.target.value)}
-                    placeholder="My Team"
+                    placeholder={t("namePlaceholder")}
                     required
                   />
                 </div>
                 <div className="flex flex-col gap-2">
-                  <Label htmlFor="grp-desc">Description</Label>
+                  <Label htmlFor="grp-desc">{t("common:common.description")}</Label>
                   <Input
                     id="grp-desc"
                     value={description}
@@ -127,7 +129,7 @@ export default function GroupsPage() {
                 {error && <p className="text-sm text-destructive">{error}</p>}
                 <DialogFooter>
                   <Button type="submit" disabled={busy}>
-                    {busy ? "Creating…" : "Create"}
+                    {busy ? t("common:action.creating") : t("common:action.create")}
                   </Button>
                 </DialogFooter>
               </form>
@@ -146,16 +148,16 @@ export default function GroupsPage() {
         </div>
       ) : groups.length === 0 ? (
         <div className="rounded-lg border border-dashed p-12 text-center text-muted-foreground">
-          No groups yet.
+          {t("noGroups")}
         </div>
       ) : (
         <div className="rounded-lg border">
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead>Name</TableHead>
-                <TableHead>Description</TableHead>
-                <TableHead className="w-32 text-right">Actions</TableHead>
+                <TableHead>{t("common:common.name")}</TableHead>
+                <TableHead>{t("common:common.description")}</TableHead>
+                <TableHead className="w-32 text-right">{t("actions")}</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -177,14 +179,14 @@ export default function GroupsPage() {
                       onClick={() => setMembersFor(g)}
                     >
                       <Users className="size-4" />
-                      Members
+                      {t("members")}
                     </Button>
                     {isAdmin && !g.system && (
                       <Button
                         variant="ghost"
                         size="sm"
                         onClick={() => onDelete(g)}
-                        aria-label={`Delete ${g.name}`}
+                        aria-label={t("deleteGroupAria", { name: g.name })}
                       >
                         <Trash2 className="size-4 text-destructive" />
                       </Button>
@@ -215,6 +217,7 @@ function MembersDialog({
   onClose: () => void;
   canEdit: boolean;
 }) {
+  const { t } = useTranslation("groups");
   const [members, setMembers] = useState<GroupMember[]>([]);
   const [account, setAccount] = useState("");
   const [error, setError] = useState("");
@@ -261,34 +264,32 @@ function MembersDialog({
     <Dialog open={!!group} onOpenChange={(o) => !o && onClose()}>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>Members of {group?.name}</DialogTitle>
+          <DialogTitle>{t("membersOf", { name: group?.name })}</DialogTitle>
           <DialogDescription>
-            {canEdit
-              ? "Add accounts by username. Membership grants the group's permissions."
-              : "Read-only view."}
+            {canEdit ? t("membersDescEdit") : t("membersDescReadOnly")}
           </DialogDescription>
         </DialogHeader>
         {canEdit && (
           <form onSubmit={add} className="flex items-end gap-2">
             <div className="flex flex-1 flex-col gap-2">
-              <Label htmlFor="member-acct">Username</Label>
+              <Label htmlFor="member-acct">{t("username")}</Label>
               <Input
                 id="member-acct"
                 value={account}
                 onChange={(e) => setAccount(e.target.value)}
-                placeholder="alice"
+                placeholder={t("memberPlaceholder")}
               />
             </div>
             <Button type="submit" disabled={!account.trim()}>
               <Plus className="size-4" />
-              Add
+              {t("common:action.add")}
             </Button>
           </form>
         )}
         {error && <p className="text-sm text-destructive">{error}</p>}
         <div className="max-h-72 overflow-auto rounded-md border">
           {members.length === 0 ? (
-            <p className="p-6 text-center text-sm text-muted-foreground">No members.</p>
+            <p className="p-6 text-center text-sm text-muted-foreground">{t("noMembers")}</p>
           ) : (
             <Table>
               <TableBody>
@@ -304,7 +305,7 @@ function MembersDialog({
                           variant="ghost"
                           size="icon"
                           onClick={() => remove(m)}
-                          aria-label={`Remove ${m.username}`}
+                          aria-label={t("removeMemberAria", { name: m.username })}
                         >
                           <X className="size-4" />
                         </Button>

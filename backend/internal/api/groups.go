@@ -48,7 +48,7 @@ func (s *Server) handleListGroups(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleCreateGroup(w http.ResponseWriter, r *http.Request) {
 	acct := s.account(r)
 	if acct == nil || !acct.Admin {
-		forbid(w, "createGroup")
+		s.forbid(w, r, "createGroup")
 		return
 	}
 	var req struct {
@@ -95,7 +95,7 @@ func (s *Server) handleGetGroup(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleDeleteGroup(w http.ResponseWriter, r *http.Request) {
 	acct := s.account(r)
 	if acct == nil || !acct.Admin {
-		forbid(w, "deleteGroup")
+		s.forbid(w, r, "deleteGroup")
 		return
 	}
 	g, err := s.resolveGroup(r.PathValue("id"))
@@ -144,7 +144,7 @@ func (s *Server) handleListGroupMembers(w http.ResponseWriter, r *http.Request) 
 func (s *Server) handleAddGroupMember(w http.ResponseWriter, r *http.Request) {
 	acct := s.account(r)
 	if acct == nil || !acct.Admin {
-		forbid(w, "editGroupMembers")
+		s.forbid(w, r, "editGroupMembers")
 		return
 	}
 	g, err := s.resolveGroup(r.PathValue("id"))
@@ -172,7 +172,7 @@ func (s *Server) handleAddGroupMember(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleDeleteGroupMember(w http.ResponseWriter, r *http.Request) {
 	acct := s.account(r)
 	if acct == nil || !acct.Admin {
-		forbid(w, "editGroupMembers")
+		s.forbid(w, r, "editGroupMembers")
 		return
 	}
 	g, err := s.resolveGroup(r.PathValue("id"))
@@ -218,7 +218,7 @@ func (s *Server) handleSetAccess(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !s.canEditAccess(acct, name) {
-		forbid(w, PermEditAccess)
+		s.forbid(w, r, PermEditAccess)
 		return
 	}
 	var req struct {
@@ -265,7 +265,7 @@ func (s *Server) handleSetProjectConfig(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	if !s.canEditAccess(acct, name) {
-		forbid(w, PermEditAccess)
+		s.forbid(w, r, PermEditAccess)
 		return
 	}
 	var req struct {

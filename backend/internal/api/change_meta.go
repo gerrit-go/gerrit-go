@@ -1,10 +1,10 @@
 package api
 
 import (
-	"fmt"
 	"net/http"
 	"strconv"
 
+	"gerrit-go/internal/i18n"
 	"gerrit-go/internal/notify"
 	"gerrit-go/internal/store"
 )
@@ -67,7 +67,7 @@ func (s *Server) handleSetHashtags(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !s.can(acct, c.Project, branchRef(c.Branch), PermEditTopic) {
-		forbid(w, PermEditTopic)
+		s.forbid(w, r, PermEditTopic)
 		return
 	}
 	var req struct {
@@ -123,12 +123,13 @@ func (s *Server) handleGetAssignee(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleSetAssignee(w http.ResponseWriter, r *http.Request) {
 	acct := s.account(r)
+	lang := i18n.LangFrom(r.Context())
 	c, ok := s.loadChange(w, r)
 	if !ok {
 		return
 	}
 	if !s.can(acct, c.Project, branchRef(c.Branch), PermEditTopic) {
-		forbid(w, PermEditTopic)
+		s.forbid(w, r, PermEditTopic)
 		return
 	}
 	var req struct {
@@ -150,12 +151,13 @@ func (s *Server) handleSetAssignee(w http.ResponseWriter, r *http.Request) {
 	name := orDefault(target.FullName, target.Username)
 	s.db.AddChangeMessage(&store.ChangeMessage{
 		ChangeNum: c.Number, Type: "assignee", AuthorID: acct.ID,
-		Message: fmt.Sprintf("Assignee set to %s.", name),
+		Message: i18n.T(lang, "msg.assigneeSet", name),
 	})
-	s.db.AddAttention(c.Number, target.ID, "Assigned to you")
+	s.db.AddAttention(c.Number, target.ID, i18n.T(lang, "msg.assignedToYou"))
 	s.notifyChange(c, acct.ID, notify.Event{
 		Type:            "assignee",
-		Message:         acct.FullName + " assigned this change to you.",
+		Lang:            lang,
+		Message:         i18n.T(lang, "msg.assigneeNotify", acct.FullName),
 		ExtraRecipients: []int64{target.ID},
 	})
 	writeJSON(w, http.StatusOK, accountBrief(target))
@@ -163,12 +165,13 @@ func (s *Server) handleSetAssignee(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleDeleteAssignee(w http.ResponseWriter, r *http.Request) {
 	acct := s.account(r)
+	lang := i18n.LangFrom(r.Context())
 	c, ok := s.loadChange(w, r)
 	if !ok {
 		return
 	}
 	if !s.can(acct, c.Project, branchRef(c.Branch), PermEditTopic) {
-		forbid(w, PermEditTopic)
+		s.forbid(w, r, PermEditTopic)
 		return
 	}
 	if err := s.db.SetAssignee(c.Number, 0); err != nil {
@@ -176,7 +179,7 @@ func (s *Server) handleDeleteAssignee(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.db.AddChangeMessage(&store.ChangeMessage{
-		ChangeNum: c.Number, Type: "assignee", AuthorID: acct.ID, Message: "Assignee removed.",
+		ChangeNum: c.Number, Type: "assignee", AuthorID: acct.ID, Message: i18n.T(lang, "msg.assigneeRemoved"),
 	})
 	s.db.TouchChange(c.Number)
 	writeJSON(w, http.StatusOK, nil)
@@ -200,12 +203,13 @@ func (s *Server) handleListAttention(w http.ResponseWriter, r *http.Request) {
 // handleAddAttention adds an account to the change's attention set.
 func (s *Server) handleAddAttention(w http.ResponseWriter, r *http.Request) {
 	acct := s.account(r)
+	lang := i18n.LangFrom(r.Context())
 	c, ok := s.loadChange(w, r)
 	if !ok {
 		return
 	}
 	if c.OwnerID != acct.ID && !s.can(acct, c.Project, branchRef(c.Branch), PermComment) {
-		forbid(w, PermComment)
+		s.forbid(w, r, PermComment)
 		return
 	}
 	var req struct {
@@ -228,11 +232,12 @@ func (s *Server) handleAddAttention(w http.ResponseWriter, r *http.Request) {
 	name := orDefault(target.FullName, target.Username)
 	s.db.AddChangeMessage(&store.ChangeMessage{
 		ChangeNum: c.Number, Type: "attention", AuthorID: acct.ID,
-		Message: fmt.Sprintf("Added %s to the attention set.", name),
+		Message: i18n.T(lang, "msg.attentionAdded", name),
 	})
 	s.notifyChange(c, acct.ID, notify.Event{
 		Type:            "attention",
-		Message:         acct.FullName + " added you to the attention set.",
+		Lang:            lang,
+		Message:         i18n.T(lang, "msg.attentionNotify", acct.FullName),
 		ExtraRecipients: []int64{target.ID},
 	})
 	list, _ := s.db.ListAttention(c.Number)
@@ -242,12 +247,13 @@ func (s *Server) handleAddAttention(w http.ResponseWriter, r *http.Request) {
 // handleRemoveAttention drops an account from the change's attention set.
 func (s *Server) handleRemoveAttention(w http.ResponseWriter, r *http.Request) {
 	acct := s.account(r)
+	lang := i18n.LangFrom(r.Context())
 	c, ok := s.loadChange(w, r)
 	if !ok {
 		return
 	}
 	if c.OwnerID != acct.ID && !s.can(acct, c.Project, branchRef(c.Branch), PermComment) {
-		forbid(w, PermComment)
+		s.forbid(w, r, PermComment)
 		return
 	}
 	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
@@ -265,7 +271,7 @@ func (s *Server) handleRemoveAttention(w http.ResponseWriter, r *http.Request) {
 	}
 	s.db.AddChangeMessage(&store.ChangeMessage{
 		ChangeNum: c.Number, Type: "attention", AuthorID: acct.ID,
-		Message: fmt.Sprintf("Removed %s from the attention set.", name),
+		Message: i18n.T(lang, "msg.attentionRemoved", name),
 	})
 	list, _ := s.db.ListAttention(c.Number)
 	writeJSON(w, http.StatusOK, attentionInfo(list))

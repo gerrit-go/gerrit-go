@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
+import { useTranslation } from "react-i18next";
 import { Inbox, Send, Star, Archive, Eye } from "lucide-react";
 import { api, type ChangeInfo } from "@/lib/api";
 import { useAuth } from "@/auth";
@@ -20,17 +21,19 @@ type Section = {
 };
 
 function useSections(): Section[] {
+  const { t } = useTranslation("dashboard");
   return [
-    { key: "incoming", title: "Incoming reviews", icon: Inbox, query: "reviewer:self -owner:self status:open" },
-    { key: "outgoing", title: "Outgoing reviews", icon: Send, query: "owner:self status:open" },
-    { key: "starred", title: "Starred", icon: Star, query: "is:starred" },
-    { key: "watched", title: "Watched", icon: Eye, query: "is:watched status:open" },
-    { key: "closed", title: "Recently closed", icon: Archive, query: `status:closed after:${daysAgo(7)}` },
+    { key: "incoming", title: t("incoming"), icon: Inbox, query: "reviewer:self -owner:self status:open" },
+    { key: "outgoing", title: t("outgoing"), icon: Send, query: "owner:self status:open" },
+    { key: "starred", title: t("starred"), icon: Star, query: "is:starred" },
+    { key: "watched", title: t("watched"), icon: Eye, query: "is:watched status:open" },
+    { key: "closed", title: t("closed"), icon: Archive, query: `status:closed after:${daysAgo(7)}` },
   ];
 }
 
 export default function DashboardPage() {
   const { user, loading } = useAuth();
+  const { t } = useTranslation("dashboard");
   const navigate = useNavigate();
   const sections = useSections();
 
@@ -43,8 +46,8 @@ export default function DashboardPage() {
   return (
     <div className="flex flex-col gap-4">
       <div className="flex items-center gap-3">
-        <h1 className="text-xl font-semibold">Dashboard</h1>
-        <span className="text-sm text-muted-foreground">Welcome back, {user.name}</span>
+        <h1 className="text-xl font-semibold">{t("common:nav.dashboard")}</h1>
+        <span className="text-sm text-muted-foreground">{t("welcome", { name: user.name })}</span>
       </div>
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
         {sections.map((s) => (
@@ -56,6 +59,7 @@ export default function DashboardPage() {
 }
 
 function DashboardSection({ section }: { section: Section }) {
+  const { t } = useTranslation("dashboard");
   const [changes, setChanges] = useState<ChangeInfo[] | null>(null);
   const [total, setTotal] = useState(0);
   const Icon = section.icon;
@@ -89,7 +93,7 @@ function DashboardSection({ section }: { section: Section }) {
           to={`/?q=${encodeURIComponent(section.query)}`}
           className="text-xs text-muted-foreground hover:underline"
         >
-          {changes === null ? "" : `View all${total > 0 ? ` (${total})` : ""}`}
+          {changes === null ? "" : total > 0 ? t("viewAllCount", { total }) : t("viewAll")}
         </Link>
       </CardHeader>
       <div className="px-6 pb-4">
@@ -100,7 +104,7 @@ function DashboardSection({ section }: { section: Section }) {
             ))}
           </div>
         ) : changes.length === 0 ? (
-          <p className="py-4 text-center text-sm text-muted-foreground">Nothing here.</p>
+          <p className="py-4 text-center text-sm text-muted-foreground">{t("empty")}</p>
         ) : (
           <ul className="divide-y">
             {changes.map((c) => (

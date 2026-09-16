@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import { useTranslation } from "react-i18next";
+import type { TFunction } from "i18next";
 import { Bell, CheckCheck } from "lucide-react";
 import { api, type NotificationInfo } from "@/lib/api";
 import { Button } from "@/components/ui/button";
@@ -14,20 +16,21 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/utils";
 
-function timeAgo(iso: string): string {
+function timeAgo(iso: string, t: TFunction): string {
   const then = new Date(iso).getTime();
   if (Number.isNaN(then)) return "";
   const secs = Math.floor((Date.now() - then) / 1000);
-  if (secs < 60) return "just now";
+  if (secs < 60) return t("justNow");
   const mins = Math.floor(secs / 60);
-  if (mins < 60) return `${mins}m ago`;
+  if (mins < 60) return t("minutesAgo", { n: mins });
   const hours = Math.floor(mins / 60);
-  if (hours < 24) return `${hours}h ago`;
+  if (hours < 24) return t("hoursAgo", { n: hours });
   const days = Math.floor(hours / 24);
-  return `${days}d ago`;
+  return t("daysAgo", { n: days });
 }
 
 export default function NotificationBell() {
+  const { t } = useTranslation("notifications");
   const navigate = useNavigate();
   const [items, setItems] = useState<NotificationInfo[]>([]);
   const [unread, setUnread] = useState(0);
@@ -45,8 +48,8 @@ export default function NotificationBell() {
 
   useEffect(() => {
     load();
-    const t = setInterval(load, 20000);
-    return () => clearInterval(t);
+    const timer = setInterval(load, 20000);
+    return () => clearInterval(timer);
   }, [load]);
 
   const markAll = async () => {
@@ -68,7 +71,7 @@ export default function NotificationBell() {
   return (
     <DropdownMenu open={open} onOpenChange={setOpen}>
       <DropdownMenuTrigger asChild>
-        <Button variant="ghost" size="icon" aria-label="Notifications" className="relative">
+        <Button variant="ghost" size="icon" aria-label={t("title")} className="relative">
           <Bell className="size-4" />
           {unread > 0 && (
             <span className="absolute -right-0.5 -top-0.5 flex size-4 items-center justify-center rounded-full bg-destructive text-[10px] font-semibold text-destructive-foreground">
@@ -79,17 +82,17 @@ export default function NotificationBell() {
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="w-80 p-0">
         <DropdownMenuLabel className="flex items-center justify-between">
-          <span>Notifications</span>
+          <span>{t("title")}</span>
           {unread > 0 && (
             <Button variant="ghost" size="sm" className="h-6 px-2 text-xs" onClick={markAll}>
               <CheckCheck className="size-3.5" />
-              Mark all read
+              {t("markAllRead")}
             </Button>
           )}
         </DropdownMenuLabel>
         <DropdownMenuSeparator />
         {items.length === 0 ? (
-          <p className="px-3 py-6 text-center text-sm text-muted-foreground">No notifications.</p>
+          <p className="px-3 py-6 text-center text-sm text-muted-foreground">{t("empty")}</p>
         ) : (
           <div className="max-h-96 overflow-y-auto">
             {items.map((n) => (
@@ -110,7 +113,7 @@ export default function NotificationBell() {
                   </Badge>
                   {!n.read && <span className="size-1.5 rounded-full bg-primary" />}
                   <span className="ml-auto text-[10px] text-muted-foreground">
-                    {timeAgo(n.created)}
+                    {timeAgo(n.created, t)}
                   </span>
                 </div>
                 <span className="line-clamp-2 text-xs">{n.message}</span>

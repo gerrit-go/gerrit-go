@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
+import { useTranslation } from "react-i18next";
 import { Bell, BellOff, ChevronRight, File, Folder, GitCommitHorizontal, Pencil, Terminal } from "lucide-react";
 import { api, type BranchInfo, type CommitInfo, type FileEntry } from "@/lib/api";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -32,6 +33,7 @@ export default function ProjectDetailPage() {
   const params = useParams();
   const project = decodeURIComponent(params["*"] ?? "");
   const { user } = useAuth();
+  const { t } = useTranslation("projectDetail");
   const [searchParams, setSearchParams] = useSearchParams();
   const revision = searchParams.get("revision") ?? "";
   const dirPath = searchParams.get("path") ?? "";
@@ -88,8 +90,8 @@ export default function ProjectDetailPage() {
     api
       .fileText(project, revision || rev, viewFile)
       .then(setFileText)
-      .catch(() => setFileText("// failed to load file"));
-  }, [project, viewFile, revision, rev]);
+      .catch(() => setFileText(t("fileLoadFailed")));
+  }, [project, viewFile, revision, rev, t]);
 
   const crumbs = useMemo(() => {
     if (!dirPath) return [];
@@ -130,7 +132,7 @@ export default function ProjectDetailPage() {
             onChange={(e) => setParam("revision", e.target.value === (branches[0]?.name ?? "") ? "" : e.target.value)}
             className="h-9 rounded-md border border-input bg-transparent px-2 text-sm shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
           >
-            {branches.length === 0 && <option value="">(empty repository)</option>}
+            {branches.length === 0 && <option value="">{t("emptyRepo")}</option>}
             {branches.map((b) => (
               <option key={b.name} value={b.name}>
                 {b.name}
@@ -144,14 +146,14 @@ export default function ProjectDetailPage() {
 
       <Tabs value={tab} onValueChange={(v) => setParam("tab", v === "files" ? "" : v)}>
         <TabsList>
-          <TabsTrigger value="files">Files</TabsTrigger>
-          <TabsTrigger value="commits">Commits</TabsTrigger>
-          <TabsTrigger value="branches">Branches</TabsTrigger>
-          <TabsTrigger value="tags">Tags</TabsTrigger>
-          <TabsTrigger value="submit">Submit</TabsTrigger>
-          <TabsTrigger value="access">Access</TabsTrigger>
-          <TabsTrigger value="manage">Manage</TabsTrigger>
-          <TabsTrigger value="webhooks">Webhooks</TabsTrigger>
+          <TabsTrigger value="files">{t("tabs.files")}</TabsTrigger>
+          <TabsTrigger value="commits">{t("tabs.commits")}</TabsTrigger>
+          <TabsTrigger value="branches">{t("tabs.branches")}</TabsTrigger>
+          <TabsTrigger value="tags">{t("tabs.tags")}</TabsTrigger>
+          <TabsTrigger value="submit">{t("tabs.submit")}</TabsTrigger>
+          <TabsTrigger value="access">{t("tabs.access")}</TabsTrigger>
+          <TabsTrigger value="manage">{t("tabs.manage")}</TabsTrigger>
+          <TabsTrigger value="webhooks">{t("tabs.webhooks")}</TabsTrigger>
         </TabsList>
 
         <TabsContent value="files" className="mt-3">
@@ -162,13 +164,13 @@ export default function ProjectDetailPage() {
                   className="text-sm text-muted-foreground hover:text-foreground"
                   onClick={() => setParam("file", "")}
                 >
-                  ← back to files
+                  {t("backToFiles")}
                 </button>
                 <span className="ml-auto font-mono text-sm">{viewFile}</span>
                 {canEdit && projectState === "ACTIVE" && fileText !== null && (
                   <Button size="sm" variant="outline" onClick={() => setEditOpen(true)}>
                     <Pencil className="size-3.5" />
-                    Edit
+                    {t("common:action.edit")}
                   </Button>
                 )}
               </div>
@@ -209,7 +211,7 @@ export default function ProjectDetailPage() {
                 </div>
               ) : entries.length === 0 ? (
                 <p className="p-8 text-center text-sm text-muted-foreground">
-                  This branch is empty. Push some commits to get started.
+                  {t("emptyBranch")}
                 </p>
               ) : (
                 <Table>
@@ -252,7 +254,7 @@ export default function ProjectDetailPage() {
               ))}
             </div>
           ) : commits.length === 0 ? (
-            <p className="p-8 text-center text-sm text-muted-foreground">No commits yet.</p>
+            <p className="p-8 text-center text-sm text-muted-foreground">{t("noCommits")}</p>
           ) : (
             <div className="rounded-lg border">
               <Table>
@@ -275,7 +277,7 @@ export default function ProjectDetailPage() {
                             e.preventDefault();
                             navigator.clipboard.writeText(c.sha);
                           }}
-                          title="Copy full SHA"
+                          title={t("copyFullSha")}
                           className="hover:text-foreground"
                         >
                           {c.sha.slice(0, 8)}
@@ -353,6 +355,7 @@ function FileEditDialog({
   initial: string;
   onSaved: () => void;
 }) {
+  const { t } = useTranslation("projectDetail");
   const [content, setContent] = useState(initial);
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
@@ -361,7 +364,7 @@ function FileEditDialog({
   useEffect(() => {
     if (open) {
       setContent(initial);
-      setMessage(`Update ${path}`);
+      setMessage(t("defaultCommitMessage", { path }));
       setError("");
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -384,10 +387,10 @@ function FileEditDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-2xl">
         <DialogHeader>
-          <DialogTitle>Edit {path}</DialogTitle>
+          <DialogTitle>{t("editTitle", { path })}</DialogTitle>
           <DialogDescription>
-            Commits directly to <span className="font-mono">{branch}</span>. You must have push
-            permission on this branch.
+            {t("editDescBefore")} <span className="font-mono">{branch}</span>
+            {t("editDescAfter")}
           </DialogDescription>
         </DialogHeader>
         <Textarea
@@ -397,7 +400,7 @@ function FileEditDialog({
           spellCheck={false}
         />
         <div className="flex flex-col gap-1">
-          <Label htmlFor="commit-msg" className="text-xs">Commit message</Label>
+          <Label htmlFor="commit-msg" className="text-xs">{t("commitMessageLabel")}</Label>
           <Input
             id="commit-msg"
             className="h-8 text-sm"
@@ -408,10 +411,10 @@ function FileEditDialog({
         {error && <p className="text-sm text-destructive">{error}</p>}
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)}>
-            Cancel
+            {t("common:action.cancel")}
           </Button>
           <Button onClick={save} disabled={busy}>
-            {busy ? "Committing…" : "Commit change"}
+            {busy ? t("committing") : t("commitChange")}
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -421,6 +424,7 @@ function FileEditDialog({
 
 function WatchButton({ project }: { project: string }) {
   const { user } = useAuth();
+  const { t } = useTranslation("projectDetail");
   const [watched, setWatched] = useState(false);
   const [busy, setBusy] = useState(false);
 
@@ -451,7 +455,7 @@ function WatchButton({ project }: { project: string }) {
   return (
     <Button size="sm" variant="outline" onClick={toggle} disabled={busy}>
       {watched ? <Bell className="size-4" /> : <BellOff className="size-4" />}
-      {watched ? "Watching" : "Watch"}
+      {watched ? t("watching") : t("watch")}
     </Button>
   );
 }

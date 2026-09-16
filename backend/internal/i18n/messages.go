@@ -1,0 +1,96 @@
+package i18n
+
+// English message templates. This is the fallback catalog: any key absent from a
+// translated catalog resolves here.
+var enMessages = map[string]string{
+	// Change timeline + notification prose. Positional indices let translations
+	// reorder arguments to fit their grammar.
+	"msg.reviewNotify":        "%[1]s %[2]s on patch set %[3]d.",
+	"msg.sumLeftReview":       "left a review",
+	"msg.sumVoted":            "voted %s",
+	"msg.sumInlineComments":   "left inline comments",
+	"msg.sumVotedAndComments": "voted %[1]s and left inline comments",
+	"msg.merged":              "Change merged via %[1]s, commit %[2]s.",
+	"msg.submittedNotify":     "%[1]s submitted this change (%[2]s, commit %[3]s).",
+	"msg.psRebased":           "Uploaded patch set %[1]d (rebased onto %[2]s).",
+	"msg.psCherryPicked":      "Uploaded patch set %[1]d (cherry-picked from change %[2]d).",
+	"msg.cherryPickedFrom":    "Cherry-picked from change %d.",
+	"msg.psRevert":            "Uploaded patch set %[1]d (revert of change %[2]d).",
+	"msg.reverts":             "Reverts change %d.",
+	"msg.restored":            "Change restored.",
+	"msg.abandoned":           "Change abandoned.",
+	"msg.restoredNotify":      "%s restored this change.",
+	"msg.abandonedNotify":     "%s abandoned this change.",
+	"msg.reviewerAdded":       "Added reviewer %s.",
+	"msg.reviewerAddedNotify": "%s added you as a reviewer.",
+	"msg.reviewerRemoved":     "Removed reviewer %s.",
+	"msg.topicSet":            "Topic set to %s.",
+	"msg.topicCleared":        "Topic cleared.",
+	"msg.readyForReview":      "Change marked ready for review.",
+	"msg.wip":                 "Change marked work-in-progress.",
+	"msg.assigneeSet":         "Assignee set to %s.",
+	"msg.assignedToYou":       "Assigned to you",
+	"msg.assigneeNotify":      "%s assigned this change to you.",
+	"msg.assigneeRemoved":     "Assignee removed.",
+	"msg.attentionAdded":      "Added %s to the attention set.",
+	"msg.attentionNotify":     "%s added you to the attention set.",
+	"msg.attentionRemoved":    "Removed %s from the attention set.",
+
+	// Email body field labels.
+	"email.project": "Project: %s",
+	"email.branch":  "Branch:  %s",
+	"email.change":  "Change:  %d",
+
+	// Common API errors surfaced to the user.
+	"err.authRequired":       "authentication required",
+	"err.invalidCredentials": "invalid username or password",
+	"err.invalidBody":        "invalid request body",
+	"err.changeNotFound":     "change not found",
+	"err.projectNotFound":    "project not found",
+	"err.forbidden":          "permission denied: %s",
+}
+
+// Simplified Chinese message templates.
+var zhMessages = map[string]string{
+	"msg.reviewNotify":        "%[1]s 在补丁集 %[3]d 上%[2]s。",
+	"msg.sumLeftReview":       "留下了评审",
+	"msg.sumVoted":            "投票：%s",
+	"msg.sumInlineComments":   "留下了行内评论",
+	"msg.sumVotedAndComments": "投票：%[1]s，并留下了行内评论",
+	"msg.merged":              "变更已通过 %[1]s 合并，提交 %[2]s。",
+	"msg.submittedNotify":     "%[1]s 提交了此变更（%[2]s，提交 %[3]s）。",
+	"msg.psRebased":           "已上传补丁集 %[1]d（变基至 %[2]s）。",
+	"msg.psCherryPicked":      "已上传补丁集 %[1]d（从变更 %[2]d 拣选）。",
+	"msg.cherryPickedFrom":    "从变更 %d 拣选。",
+	"msg.psRevert":            "已上传补丁集 %[1]d（回退变更 %[2]d）。",
+	"msg.reverts":             "回退变更 %d。",
+	"msg.restored":            "变更已恢复。",
+	"msg.abandoned":           "变更已废弃。",
+	"msg.restoredNotify":      "%s 恢复了此变更。",
+	"msg.abandonedNotify":     "%s 废弃了此变更。",
+	"msg.reviewerAdded":       "已添加评审人 %s。",
+	"msg.reviewerAddedNotify": "%s 将你添加为评审人。",
+	"msg.reviewerRemoved":     "已移除评审人 %s。",
+	"msg.topicSet":            "话题已设为 %s。",
+	"msg.topicCleared":        "话题已清除。",
+	"msg.readyForReview":      "变更已标记为可评审。",
+	"msg.wip":                 "变更已标记为进行中（WIP）。",
+	"msg.assigneeSet":         "受理人已设为 %s。",
+	"msg.assignedToYou":       "已分配给你",
+	"msg.assigneeNotify":      "%s 将此变更分配给了你。",
+	"msg.assigneeRemoved":     "受理人已移除。",
+	"msg.attentionAdded":      "已将 %s 加入关注列表。",
+	"msg.attentionNotify":     "%s 将你加入了关注列表。",
+	"msg.attentionRemoved":    "已将 %s 移出关注列表。",
+
+	"email.project": "项目：%s",
+	"email.branch":  "分支：%s",
+	"email.change":  "变更：%d",
+
+	"err.authRequired":       "需要身份验证",
+	"err.invalidCredentials": "用户名或密码无效",
+	"err.invalidBody":        "请求体无效",
+	"err.changeNotFound":     "变更不存在",
+	"err.projectNotFound":    "项目不存在",
+	"err.forbidden":          "权限不足：%s",
+}

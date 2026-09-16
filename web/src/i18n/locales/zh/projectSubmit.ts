@@ -1,0 +1,23 @@
+export default {
+  submitBehaviour: "提交/合并行为",
+  submitType: "提交类型",
+  submitTypeHelp: {
+    FAST_FORWARD_ONLY: "仅允许快进合并目标分支",
+    REBASE_IF_NECESSARY: "必要时变基",
+    REBASE_ALWAYS: "总是变基",
+    MERGE_IF_NECESSARY: "必要时创建合并提交",
+    MERGE_ALWAYS: "总是创建合并提交",
+    CHERRY_PICK: "拣选到目标分支并生成新提交",
+  },
+  submitWholeTopic: "提交整个话题",
+  wholeTopicHint: "（提交某个变更时同时提交共享同一话题的所有进行中变更）",
+  submitRequirements: "提交要求",
+  requirementsHint: "当每个要求的标签达到最小值且没有投票低于或等于其阻塞值时，变更可被提交",
+  noRequirements: "未配置提交要求",
+  addRequirement: "添加要求",
+  removeRequirement: "移除要求",
+  label: "标签",
+  minValue: "最小值",
+  blockValue: "阻塞值",
+  saved: "已保存。",
+};

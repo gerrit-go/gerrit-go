@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { Plus, Save, Trash2 } from "lucide-react";
 import {
   api,
@@ -22,16 +23,8 @@ import {
 const selectCls =
   "h-9 rounded-md border border-input bg-transparent px-2 text-sm shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50";
 
-const SUBMIT_TYPE_HELP: Record<string, string> = {
-  FAST_FORWARD_ONLY: "Only allow submits that fast-forward the target branch.",
-  REBASE_IF_NECESSARY: "Rebase the change onto the target branch when a fast-forward is not possible.",
-  REBASE_ALWAYS: "Always rebase the change onto the target branch before submitting.",
-  MERGE_IF_NECESSARY: "Create a merge commit when a fast-forward is not possible.",
-  MERGE_ALWAYS: "Always create a merge commit, even when a fast-forward is possible.",
-  CHERRY_PICK: "Cherry-pick the change onto the target branch, creating a new commit.",
-};
-
 export default function ProjectSubmitPanel({ project }: { project: string }) {
+  const { t } = useTranslation("projectSubmit");
   const [config, setConfig] = useState<ProjectConfig | null>(null);
   const [canEdit, setCanEdit] = useState(false);
   const [submitType, setSubmitType] = useState("REBASE_IF_NECESSARY");
@@ -121,17 +114,17 @@ export default function ProjectSubmitPanel({ project }: { project: string }) {
 
       <section className="flex max-w-xl flex-col gap-4">
         <div className="flex items-center gap-2">
-          <h2 className="text-sm font-semibold">Submit behaviour</h2>
+          <h2 className="text-sm font-semibold">{t("submitBehaviour")}</h2>
           {canEdit && (
             <Button size="sm" className="ml-auto" onClick={save} disabled={!dirty || busy}>
               <Save className="size-4" />
-              {busy ? "Saving…" : "Save"}
+              {busy ? t("common:action.saving") : t("common:action.save")}
             </Button>
           )}
         </div>
 
         <div className="flex flex-col gap-2">
-          <Label htmlFor="submit-type">Submit type</Label>
+          <Label htmlFor="submit-type">{t("submitType")}</Label>
           {canEdit ? (
             <select
               id="submit-type"
@@ -143,9 +136,9 @@ export default function ProjectSubmitPanel({ project }: { project: string }) {
                 setSaved(false);
               }}
             >
-              {SUBMIT_TYPES.map((t) => (
-                <option key={t} value={t}>
-                  {t}
+              {SUBMIT_TYPES.map((st) => (
+                <option key={st} value={st}>
+                  {st}
                 </option>
               ))}
             </select>
@@ -153,7 +146,7 @@ export default function ProjectSubmitPanel({ project }: { project: string }) {
             <span className="text-sm">{submitType}</span>
           )}
           <p className="text-xs text-muted-foreground">
-            {SUBMIT_TYPE_HELP[submitType] ?? ""}
+            {t(`submitTypeHelp.${submitType}`, { defaultValue: "" })}
           </p>
         </div>
 
@@ -169,41 +162,36 @@ export default function ProjectSubmitPanel({ project }: { project: string }) {
               setSaved(false);
             }}
           />
-          Submit whole topic
-          <span className="text-xs text-muted-foreground">
-            (submitting one change also submits all open changes sharing its topic)
-          </span>
+          {t("submitWholeTopic")}
+          <span className="text-xs text-muted-foreground">{t("wholeTopicHint")}</span>
         </label>
 
-        {saved && <p className="text-sm text-emerald-600">Saved.</p>}
+        {saved && <p className="text-sm text-emerald-600">{t("saved")}</p>}
       </section>
 
       <section className="flex flex-col gap-2">
         <div className="flex items-center gap-2">
-          <h2 className="text-sm font-semibold">Submit requirements</h2>
+          <h2 className="text-sm font-semibold">{t("submitRequirements")}</h2>
           {canEdit && (
             <Button size="sm" variant="outline" className="ml-auto" onClick={addReq}>
               <Plus className="size-4" />
-              Add requirement
+              {t("addRequirement")}
             </Button>
           )}
         </div>
-        <p className="text-xs text-muted-foreground">
-          A change is submittable when every requirement's label reaches its minimum value and no
-          vote is at or below its block value.
-        </p>
+        <p className="text-xs text-muted-foreground">{t("requirementsHint")}</p>
         {reqs.length === 0 ? (
           <p className="rounded-lg border border-dashed p-6 text-center text-sm text-muted-foreground">
-            No submit requirements configured.
+            {t("noRequirements")}
           </p>
         ) : (
           <div className="rounded-lg border">
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead>Label</TableHead>
-                  <TableHead className="w-32">Min value</TableHead>
-                  <TableHead className="w-32">Block value</TableHead>
+                  <TableHead>{t("label")}</TableHead>
+                  <TableHead className="w-32">{t("minValue")}</TableHead>
+                  <TableHead className="w-32">{t("blockValue")}</TableHead>
                   {canEdit && <TableHead className="w-12" />}
                 </TableRow>
               </TableHeader>
@@ -253,7 +241,7 @@ export default function ProjectSubmitPanel({ project }: { project: string }) {
                           size="icon"
                           className="size-8"
                           onClick={() => removeReq(i)}
-                          aria-label="Remove requirement"
+                          aria-label={t("removeRequirement")}
                         >
                           <Trash2 className="size-4 text-destructive" />
                         </Button>

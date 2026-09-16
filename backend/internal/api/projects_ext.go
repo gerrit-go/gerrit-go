@@ -51,7 +51,7 @@ func (s *Server) handleCreateBranch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !s.can(acct, project, "refs/heads/"+branch, PermPush) {
-		forbid(w, PermPush)
+		s.forbid(w, r, PermPush)
 		return
 	}
 	sha, err := s.git.CreateBranch(project, branch, req.Revision)
@@ -71,7 +71,7 @@ func (s *Server) handleDeleteBranch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !s.can(acct, project, "refs/heads/"+branch, PermPush) {
-		forbid(w, PermPush)
+		s.forbid(w, r, PermPush)
 		return
 	}
 	if err := s.git.DeleteBranch(project, branch); err != nil {
@@ -120,7 +120,7 @@ func (s *Server) handleCreateTag(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !s.can(acct, project, "refs/tags/"+tag, PermPush) {
-		forbid(w, PermPush)
+		s.forbid(w, r, PermPush)
 		return
 	}
 	sha, err := s.git.CreateTag(project, tag, req.Revision, req.Message)
@@ -140,7 +140,7 @@ func (s *Server) handleDeleteTag(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !s.can(acct, project, "refs/tags/"+tag, PermPush) {
-		forbid(w, PermPush)
+		s.forbid(w, r, PermPush)
 		return
 	}
 	if err := s.git.DeleteTag(project, tag); err != nil {
@@ -179,7 +179,7 @@ func (s *Server) handleEditFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !s.can(acct, project, "refs/heads/"+branch, PermPush) {
-		forbid(w, PermPush)
+		s.forbid(w, r, PermPush)
 		return
 	}
 	authorName := orDefault(acct.FullName, acct.Username)
@@ -207,7 +207,7 @@ func (s *Server) handleSetProjectState(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !s.canEditAccess(acct, project) {
-		forbid(w, PermEditAccess)
+		s.forbid(w, r, PermEditAccess)
 		return
 	}
 	var req struct {
@@ -238,7 +238,7 @@ func (s *Server) handleDeleteProject(w http.ResponseWriter, r *http.Request) {
 	acct := s.account(r)
 	project := r.PathValue("name")
 	if acct == nil || !acct.Admin {
-		forbid(w, "deleteProject")
+		s.forbid(w, r, "deleteProject")
 		return
 	}
 	if _, err := s.db.GetProject(project); err != nil {

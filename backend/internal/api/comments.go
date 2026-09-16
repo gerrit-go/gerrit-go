@@ -64,7 +64,7 @@ func (s *Server) handlePutDraft(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !s.can(acct, c.Project, branchRef(c.Branch), PermComment) {
-		forbid(w, PermComment)
+		s.forbid(w, r, PermComment)
 		return
 	}
 	var req struct {

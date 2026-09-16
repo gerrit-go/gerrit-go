@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { Plus, Save, Trash2 } from "lucide-react";
 import {
   api,
@@ -40,6 +41,7 @@ function isLabel(perm: string) {
 }
 
 export default function ProjectAccessPanel({ project }: { project: string }) {
+  const { t } = useTranslation("projectAccess");
   const [data, setData] = useState<ProjectAccess | null>(null);
   const [groups, setGroups] = useState<GroupInfo[]>([]);
   const [rules, setRules] = useState<AccessRuleInfo[]>([]);
@@ -129,16 +131,16 @@ export default function ProjectAccessPanel({ project }: { project: string }) {
 
       <section className="flex flex-col gap-2">
         <div className="flex items-center gap-2">
-          <h2 className="text-sm font-semibold">Project rules</h2>
+          <h2 className="text-sm font-semibold">{t("projectRules")}</h2>
           {canEdit && (
             <div className="ml-auto flex items-center gap-2">
               <Button size="sm" variant="outline" onClick={addRule}>
                 <Plus className="size-4" />
-                Add rule
+                {t("addRule")}
               </Button>
               <Button size="sm" onClick={save} disabled={!dirty || busy}>
                 <Save className="size-4" />
-                {busy ? "Saving…" : "Save"}
+                {busy ? t("common:action.saving") : t("common:action.save")}
               </Button>
             </div>
           )}
@@ -146,18 +148,18 @@ export default function ProjectAccessPanel({ project }: { project: string }) {
 
         {rules.length === 0 ? (
           <p className="rounded-lg border border-dashed p-6 text-center text-sm text-muted-foreground">
-            No project-specific rules. The global defaults below apply.
+            {t("noRules")}
           </p>
         ) : (
           <div className="rounded-lg border">
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead>Ref pattern</TableHead>
-                  <TableHead>Permission</TableHead>
-                  <TableHead>Group</TableHead>
-                  <TableHead>Action</TableHead>
-                  <TableHead>Range</TableHead>
+                  <TableHead>{t("refPattern")}</TableHead>
+                  <TableHead>{t("permission")}</TableHead>
+                  <TableHead>{t("group")}</TableHead>
+                  <TableHead>{t("action")}</TableHead>
+                  <TableHead>{t("range")}</TableHead>
                   {canEdit && <TableHead className="w-12" />}
                 </TableRow>
               </TableHeader>
@@ -276,7 +278,7 @@ export default function ProjectAccessPanel({ project }: { project: string }) {
                           size="icon"
                           className="size-8"
                           onClick={() => remove(i)}
-                          aria-label="Remove rule"
+                          aria-label={t("removeRule")}
                         >
                           <Trash2 className="size-4 text-destructive" />
                         </Button>
@@ -292,10 +294,10 @@ export default function ProjectAccessPanel({ project }: { project: string }) {
 
       <section className="flex flex-col gap-2">
         <h2 className="text-sm font-semibold text-muted-foreground">
-          Global defaults (read-only)
+          {t("globalDefaults")}
         </h2>
         {inherited.length === 0 ? (
-          <p className="text-sm text-muted-foreground">None.</p>
+          <p className="text-sm text-muted-foreground">{t("none")}</p>
         ) : (
           <div className="rounded-lg border">
             <Table>

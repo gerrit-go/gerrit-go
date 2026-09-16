@@ -8,6 +8,7 @@ import (
 	"net/smtp"
 	"strings"
 
+	"gerrit-go/internal/i18n"
 	"gerrit-go/internal/store"
 )
 
@@ -34,6 +35,9 @@ type Event struct {
 	OwnerID      int64
 	ActorID      int64
 	Message      string
+	// Lang is the request language used to localize the email body. Empty means
+	// English.
+	Lang string
 	// NotifyOwner includes the change owner in the recipient set.
 	NotifyOwner bool
 	// IncludeReviewers adds every current reviewer of the change.
@@ -126,7 +130,10 @@ func (n *Notifier) renderEmail(ev Event) (subject, body string) {
 	subject = fmt.Sprintf("[%s] %s (%s)", ev.Project, ev.Subject, ev.Type)
 	var b strings.Builder
 	fmt.Fprintf(&b, "%s\n\n", ev.Message)
-	fmt.Fprintf(&b, "Project: %s\nBranch:  %s\nChange:  %d\n", ev.Project, ev.Branch, ev.ChangeNumber)
+	fmt.Fprintf(&b, "%s\n%s\n%s\n",
+		i18n.T(ev.Lang, "email.project", ev.Project),
+		i18n.T(ev.Lang, "email.branch", ev.Branch),
+		i18n.T(ev.Lang, "email.change", ev.ChangeNumber))
 	if n.baseURL != "" {
 		fmt.Fprintf(&b, "\n%s/c/%d\n", n.baseURL, ev.ChangeNumber)
 	}

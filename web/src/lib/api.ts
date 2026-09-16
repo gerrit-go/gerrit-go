@@ -1,3 +1,5 @@
+import i18n from "@/i18n";
+
 export interface AccountInfo {
   _account_id: number;
   username: string;
@@ -266,6 +268,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     credentials: "include",
     ...init,
     headers: {
+      "Accept-Language": i18n.language,
       ...(init?.body ? { "Content-Type": "application/json" } : {}),
       ...init?.headers,
     },
@@ -407,7 +410,10 @@ export const api = {
     if (q) params.set("q", q);
     params.set("n", String(n));
     if (start > 0) params.set("start", String(start));
-    const res = await fetch(`/changes/?${params.toString()}`, { credentials: "include" });
+    const res = await fetch(`/changes/?${params.toString()}`, {
+      credentials: "include",
+      headers: { "Accept-Language": i18n.language },
+    });
     const text = await res.text();
     const payload = text.startsWith(")]}'") ? text.slice(text.indexOf("\n") + 1) : text;
     if (!res.ok) {

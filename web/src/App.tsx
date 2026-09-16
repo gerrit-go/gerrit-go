@@ -1,8 +1,10 @@
 import { Link, NavLink, Route, Routes, useNavigate } from "react-router-dom";
-import { GitPullRequestArrow, FolderGit2, LogOut, Search, Sun, Moon, Monitor, Check, Users, LayoutDashboard, Settings } from "lucide-react";
+import { GitPullRequestArrow, FolderGit2, LogOut, Search, Sun, Moon, Monitor, Check, Users, LayoutDashboard, Settings, Languages } from "lucide-react";
 import { useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { useAuth } from "@/auth";
 import { useTheme, type Theme } from "@/theme";
+import { LANGUAGES } from "@/i18n";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -26,16 +28,17 @@ import NotificationBell from "@/components/NotificationBell";
 
 function ThemeToggle() {
   const { theme, setTheme } = useTheme();
+  const { t } = useTranslation();
   const options: { value: Theme; label: string; icon: typeof Sun }[] = [
-    { value: "light", label: "Light", icon: Sun },
-    { value: "dark", label: "Dark", icon: Moon },
-    { value: "system", label: "System", icon: Monitor },
+    { value: "light", label: t("theme.light"), icon: Sun },
+    { value: "dark", label: t("theme.dark"), icon: Moon },
+    { value: "system", label: t("theme.system"), icon: Monitor },
   ];
   const CurrentIcon = options.find((o) => o.value === theme)!.icon;
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <Button variant="ghost" size="icon" aria-label="Select theme">
+        <Button variant="ghost" size="icon" aria-label={t("theme.select")}>
           <CurrentIcon className="size-4" />
         </Button>
       </DropdownMenuTrigger>
@@ -52,8 +55,30 @@ function ThemeToggle() {
   );
 }
 
+function LanguageSwitcher() {
+  const { i18n, t } = useTranslation();
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button variant="ghost" size="icon" aria-label={t("lang.select")}>
+          <Languages className="size-4" />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="w-40">
+        {LANGUAGES.map((l) => (
+          <DropdownMenuItem key={l.code} onClick={() => void i18n.changeLanguage(l.code)}>
+            <span className="text-sm">{l.label}</span>
+            {i18n.language === l.code && <Check className="ml-auto size-4" />}
+          </DropdownMenuItem>
+        ))}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
 function Header() {
   const { user, signOut, loading } = useAuth();
+  const { t } = useTranslation();
   const navigate = useNavigate();
   const [query, setQuery] = useState("");
 
@@ -80,7 +105,7 @@ function Header() {
           <span className="flex size-7 items-center justify-center rounded-md bg-primary text-primary-foreground">
             <GitPullRequestArrow className="size-4" />
           </span>
-          <span className="hidden sm:inline">Gerrit Go</span>
+          <span className="hidden sm:inline">{t("brand")}</span>
         </Link>
         <nav className="flex items-center gap-1 text-sm">
           {user && (
@@ -94,7 +119,7 @@ function Header() {
               }
             >
               <LayoutDashboard className="size-4" />
-              Dashboard
+              {t("nav.dashboard")}
             </NavLink>
           )}
           <NavLink
@@ -108,7 +133,7 @@ function Header() {
             }
           >
             <GitPullRequestArrow className="size-4" />
-            Changes
+            {t("nav.changes")}
           </NavLink>
           <NavLink
             to="/projects"
@@ -120,7 +145,7 @@ function Header() {
             }
           >
             <FolderGit2 className="size-4" />
-            Projects
+            {t("nav.projects")}
           </NavLink>
           {user && (
             <NavLink
@@ -133,7 +158,7 @@ function Header() {
               }
             >
               <Users className="size-4" />
-              Groups
+              {t("nav.groups")}
             </NavLink>
           )}
         </nav>
@@ -144,11 +169,12 @@ function Header() {
               id="global-search"
               value={query}
               onChange={(e) => setQuery(e.target.value)}
-              placeholder="Search changes…  ( / )"
+              placeholder={t("search.placeholder")}
               className="pl-8"
             />
           </div>
         </form>
+        <LanguageSwitcher />
         <ThemeToggle />
         {!loading && user && <NotificationBell />}
         {loading ? null : user ? (
@@ -168,7 +194,7 @@ function Header() {
               <DropdownMenuSeparator />
               <DropdownMenuItem onClick={() => navigate("/settings")}>
                 <Settings className="size-4" />
-                Settings
+                {t("action.settings")}
               </DropdownMenuItem>
               <DropdownMenuItem
                 onClick={async () => {
@@ -177,13 +203,13 @@ function Header() {
                 }}
               >
                 <LogOut className="size-4" />
-                Sign out
+                {t("action.signOut")}
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
         ) : (
           <Button asChild size="sm">
-            <Link to="/login">Sign in</Link>
+            <Link to="/login">{t("action.signIn")}</Link>
           </Button>
         )}
       </div>
@@ -213,12 +239,13 @@ export default function App() {
 }
 
 function NotFound() {
+  const { t } = useTranslation();
   return (
     <div className="flex flex-col items-center justify-center py-24 text-center">
-      <p className="text-4xl font-bold">404</p>
-      <p className="mt-2 text-muted-foreground">Page not found</p>
+      <p className="text-4xl font-bold">{t("notFound.code")}</p>
+      <p className="mt-2 text-muted-foreground">{t("notFound.message")}</p>
       <Button asChild className="mt-4">
-        <Link to="/">Back to changes</Link>
+        <Link to="/">{t("notFound.back")}</Link>
       </Button>
     </div>
   );

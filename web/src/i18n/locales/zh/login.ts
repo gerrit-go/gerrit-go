@@ -1,0 +1,17 @@
+export default {
+  welcome: "欢迎回来",
+  subtitle: "登录以评审代码，或创建一个新账号。",
+  username: "用户名",
+  password: "密码",
+  fullName: "姓名",
+  email: "邮箱",
+  signInTab: "登录",
+  registerTab: "注册",
+  signingIn: "登录中…",
+  createAccount: "创建账号",
+  creatingAccount: "创建账号中…",
+  ssoFailed: "单点登录失败（{{code}}）。",
+  or: "或",
+  ssoButton: "使用单点登录",
+  continueAnon: "不登录继续浏览",
+};

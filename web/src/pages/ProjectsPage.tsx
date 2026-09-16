@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
+import { useTranslation } from "react-i18next";
 import { FolderGit2, Plus, Terminal } from "lucide-react";
 import { api, type ProjectInfo } from "@/lib/api";
 import { useAuth } from "@/auth";
@@ -21,6 +22,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 
 export default function ProjectsPage() {
   const { user } = useAuth();
+  const { t } = useTranslation("projects");
   const [projects, setProjects] = useState<ProjectInfo[] | null>(null);
   const [error, setError] = useState("");
   const [open, setOpen] = useState(false);
@@ -61,25 +63,23 @@ export default function ProjectsPage() {
   return (
     <div className="flex flex-col gap-4">
       <div className="flex items-center gap-3">
-        <h1 className="text-xl font-semibold">Projects</h1>
+        <h1 className="text-xl font-semibold">{t("common:nav.projects")}</h1>
         {user && (
           <Dialog open={open} onOpenChange={setOpen}>
             <DialogTrigger asChild>
               <Button size="sm" className="ml-auto">
                 <Plus className="size-4" />
-                New project
+                {t("newProject")}
               </Button>
             </DialogTrigger>
             <DialogContent>
               <DialogHeader>
-                <DialogTitle>Create project</DialogTitle>
-                <DialogDescription>
-                  Creates a new empty Git repository hosted by Gerrit Go.
-                </DialogDescription>
+                <DialogTitle>{t("createProject")}</DialogTitle>
+                <DialogDescription>{t("createDescription")}</DialogDescription>
               </DialogHeader>
               <form onSubmit={onCreate} className="flex flex-col gap-4">
                 <div className="flex flex-col gap-2">
-                  <Label htmlFor="proj-name">Name</Label>
+                  <Label htmlFor="proj-name">{t("common:common.name")}</Label>
                   <Input
                     id="proj-name"
                     value={name}
@@ -89,7 +89,7 @@ export default function ProjectsPage() {
                   />
                 </div>
                 <div className="flex flex-col gap-2">
-                  <Label htmlFor="proj-desc">Description</Label>
+                  <Label htmlFor="proj-desc">{t("common:common.description")}</Label>
                   <Textarea
                     id="proj-desc"
                     value={description}
@@ -100,7 +100,7 @@ export default function ProjectsPage() {
                 {error && <p className="text-sm text-destructive">{error}</p>}
                 <DialogFooter>
                   <Button type="submit" disabled={busy}>
-                    {busy ? "Creating…" : "Create"}
+                    {busy ? t("common:action.creating") : t("common:action.create")}
                   </Button>
                 </DialogFooter>
               </form>
@@ -117,7 +117,7 @@ export default function ProjectsPage() {
         </div>
       ) : projects.length === 0 ? (
         <div className="rounded-lg border border-dashed p-12 text-center text-muted-foreground">
-          No projects yet. Create one to get started.
+          {t("empty")}
         </div>
       ) : (
         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
@@ -131,7 +131,7 @@ export default function ProjectsPage() {
                   </Link>
                 </CardTitle>
                 <CardDescription className="line-clamp-2">
-                  {p.description || "No description"}
+                  {p.description || t("noDescription")}
                 </CardDescription>
               </CardHeader>
               <CardContent className="px-4">

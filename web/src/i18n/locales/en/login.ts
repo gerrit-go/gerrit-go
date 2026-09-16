@@ -1,0 +1,17 @@
+export default {
+  welcome: "Welcome back",
+  subtitle: "Sign in to review code, or create a new account.",
+  username: "Username",
+  password: "Password",
+  fullName: "Full name",
+  email: "Email",
+  signInTab: "Sign in",
+  registerTab: "Register",
+  signingIn: "Signing in…",
+  createAccount: "Create account",
+  creatingAccount: "Creating account…",
+  ssoFailed: "Single sign-on failed ({{code}}).",
+  or: "or",
+  ssoButton: "Sign in with single sign-on",
+  continueAnon: "Continue browsing without signing in",
+};

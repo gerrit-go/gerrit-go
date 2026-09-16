@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
+import { useTranslation } from "react-i18next";
 import { GitPullRequestArrow } from "lucide-react";
 import { useAuth } from "@/auth";
 import { api } from "@/lib/api";
@@ -11,6 +12,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
 export default function LoginPage() {
   const { signIn, signUp } = useAuth();
+  const { t } = useTranslation("login");
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const [error, setError] = useState("");
@@ -23,8 +25,8 @@ export default function LoginPage() {
       .then((c) => setOauthEnabled(!!c?.auth?.oauth))
       .catch(() => setOauthEnabled(false));
     const err = searchParams.get("error");
-    if (err) setError(`Single sign-on failed (${err}).`);
-  }, [searchParams]);
+    if (err) setError(t("ssoFailed", { code: err }));
+  }, [searchParams, t]);
 
   const [loginUser, setLoginUser] = useState("");
   const [loginPass, setLoginPass] = useState("");
@@ -72,23 +74,23 @@ export default function LoginPage() {
         <span className="flex size-10 items-center justify-center rounded-lg bg-primary text-primary-foreground">
           <GitPullRequestArrow className="size-5" />
         </span>
-        <h1 className="text-2xl font-bold">Gerrit Go</h1>
+        <h1 className="text-2xl font-bold">{t("common:brand")}</h1>
       </div>
       <Card className="w-full">
         <CardHeader>
-          <CardTitle>Welcome back</CardTitle>
-          <CardDescription>Sign in to review code, or create a new account.</CardDescription>
+          <CardTitle>{t("welcome")}</CardTitle>
+          <CardDescription>{t("subtitle")}</CardDescription>
         </CardHeader>
         <CardContent>
           <Tabs defaultValue="login">
             <TabsList className="w-full">
-              <TabsTrigger value="login">Sign in</TabsTrigger>
-              <TabsTrigger value="register">Register</TabsTrigger>
+              <TabsTrigger value="login">{t("signInTab")}</TabsTrigger>
+              <TabsTrigger value="register">{t("registerTab")}</TabsTrigger>
             </TabsList>
             <TabsContent value="login">
               <form onSubmit={onLogin} className="flex flex-col gap-4 pt-2">
                 <div className="flex flex-col gap-2">
-                  <Label htmlFor="username">Username</Label>
+                  <Label htmlFor="username">{t("username")}</Label>
                   <Input
                     id="username"
                     value={loginUser}
@@ -98,7 +100,7 @@ export default function LoginPage() {
                   />
                 </div>
                 <div className="flex flex-col gap-2">
-                  <Label htmlFor="password">Password</Label>
+                  <Label htmlFor="password">{t("password")}</Label>
                   <Input
                     id="password"
                     type="password"
@@ -110,14 +112,14 @@ export default function LoginPage() {
                 </div>
                 {error && <p className="text-sm text-destructive">{error}</p>}
                 <Button type="submit" disabled={busy} className="w-full">
-                  {busy ? "Signing in…" : "Sign in"}
+                  {busy ? t("signingIn") : t("signInTab")}
                 </Button>
               </form>
             </TabsContent>
             <TabsContent value="register">
               <form onSubmit={onRegister} className="flex flex-col gap-4 pt-2">
                 <div className="flex flex-col gap-2">
-                  <Label htmlFor="reg-username">Username</Label>
+                  <Label htmlFor="reg-username">{t("username")}</Label>
                   <Input
                     id="reg-username"
                     value={regUser}
@@ -126,7 +128,7 @@ export default function LoginPage() {
                   />
                 </div>
                 <div className="flex flex-col gap-2">
-                  <Label htmlFor="reg-name">Full name</Label>
+                  <Label htmlFor="reg-name">{t("fullName")}</Label>
                   <Input
                     id="reg-name"
                     value={regName}
@@ -134,7 +136,7 @@ export default function LoginPage() {
                   />
                 </div>
                 <div className="flex flex-col gap-2">
-                  <Label htmlFor="reg-email">Email</Label>
+                  <Label htmlFor="reg-email">{t("email")}</Label>
                   <Input
                     id="reg-email"
                     type="email"
@@ -143,7 +145,7 @@ export default function LoginPage() {
                   />
                 </div>
                 <div className="flex flex-col gap-2">
-                  <Label htmlFor="reg-password">Password</Label>
+                  <Label htmlFor="reg-password">{t("password")}</Label>
                   <Input
                     id="reg-password"
                     type="password"
@@ -155,7 +157,7 @@ export default function LoginPage() {
                 </div>
                 {error && <p className="text-sm text-destructive">{error}</p>}
                 <Button type="submit" disabled={busy} className="w-full">
-                  {busy ? "Creating account…" : "Create account"}
+                  {busy ? t("creatingAccount") : t("createAccount")}
                 </Button>
               </form>
             </TabsContent>
@@ -166,17 +168,17 @@ export default function LoginPage() {
         <div className="mt-4 flex w-full max-w-md flex-col items-center gap-3">
           <div className="flex w-full items-center gap-3 text-xs text-muted-foreground">
             <span className="h-px flex-1 bg-border" />
-            or
+            {t("or")}
             <span className="h-px flex-1 bg-border" />
           </div>
           <Button asChild variant="outline" className="w-full">
-            <a href="/login/oauth">Sign in with single sign-on</a>
+            <a href="/login/oauth">{t("ssoButton")}</a>
           </Button>
         </div>
       )}
       <p className="mt-4 text-sm text-muted-foreground">
         <Link to="/" className="underline underline-offset-4 hover:text-foreground">
-          Continue browsing without signing in
+          {t("continueAnon")}
         </Link>
       </p>
     </div>
