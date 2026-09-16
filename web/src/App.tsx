@@ -1,5 +1,5 @@
 import { Link, NavLink, Route, Routes, useNavigate } from "react-router-dom";
-import { GitPullRequestArrow, FolderGit2, LogOut, Search, Sun, Moon, Monitor, Check, Users, LayoutDashboard, Settings, Languages } from "lucide-react";
+import { GitPullRequestArrow, FolderGit2, LogOut, Search, Sun, Moon, Monitor, Check, Users, LayoutDashboard, Settings, Languages, Menu } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useAuth } from "@/auth";
@@ -76,6 +76,35 @@ function LanguageSwitcher() {
   );
 }
 
+function MobileNav() {
+  const { user } = useAuth();
+  const { t } = useTranslation();
+  const navigate = useNavigate();
+  const links: { to: string; label: string; icon: typeof Sun }[] = [
+    ...(user ? [{ to: "/dashboard", label: t("nav.dashboard"), icon: LayoutDashboard }] : []),
+    { to: "/", label: t("nav.changes"), icon: GitPullRequestArrow },
+    { to: "/projects", label: t("nav.projects"), icon: FolderGit2 },
+    ...(user ? [{ to: "/groups", label: t("nav.groups"), icon: Users }] : []),
+  ];
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button variant="ghost" size="icon" className="md:hidden" aria-label={t("nav.menu")}>
+          <Menu className="size-4" />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="start" className="w-48">
+        {links.map((l) => (
+          <DropdownMenuItem key={l.to} onClick={() => navigate(l.to)}>
+            <l.icon className="size-4" />
+            {l.label}
+          </DropdownMenuItem>
+        ))}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
 function Header() {
   const { user, signOut, loading } = useAuth();
   const { t } = useTranslation();
@@ -100,14 +129,15 @@ function Header() {
 
   return (
     <header className="sticky top-0 z-40 border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
-      <div className="mx-auto flex h-14 max-w-7xl items-center gap-4 px-4">
+      <div className="mx-auto flex h-14 max-w-7xl items-center gap-2 px-4 sm:gap-4">
         <Link to="/" className="flex items-center gap-2 font-semibold">
           <span className="flex size-7 items-center justify-center rounded-md bg-primary text-primary-foreground">
             <GitPullRequestArrow className="size-4" />
           </span>
           <span className="hidden sm:inline">{t("brand")}</span>
         </Link>
-        <nav className="flex items-center gap-1 text-sm">
+        <MobileNav />
+        <nav className="hidden items-center gap-1 text-sm md:flex">
           {user && (
             <NavLink
               to="/dashboard"
@@ -174,45 +204,58 @@ function Header() {
             />
           </div>
         </form>
-        <LanguageSwitcher />
-        <ThemeToggle />
-        {!loading && user && <NotificationBell />}
-        {loading ? null : user ? (
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button variant="ghost" className="rounded-full px-2">
-                <span className="flex size-7 items-center justify-center rounded-full bg-secondary text-xs font-semibold">
-                  {user.name.slice(0, 1).toUpperCase()}
-                </span>
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="w-48">
-              <DropdownMenuLabel>
-                <div className="text-sm font-medium">{user.name}</div>
-                <div className="text-xs font-normal text-muted-foreground">@{user.username}</div>
-              </DropdownMenuLabel>
-              <DropdownMenuSeparator />
-              <DropdownMenuItem onClick={() => navigate("/settings")}>
-                <Settings className="size-4" />
-                {t("action.settings")}
-              </DropdownMenuItem>
-              <DropdownMenuItem
-                onClick={async () => {
-                  await signOut();
-                  navigate("/login");
-                }}
-              >
-                <LogOut className="size-4" />
-                {t("action.signOut")}
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
-        ) : (
-          <Button asChild size="sm">
-            <Link to="/login">{t("action.signIn")}</Link>
-          </Button>
-        )}
+        <div className="ml-auto flex items-center gap-1 md:ml-0">
+          <LanguageSwitcher />
+          <ThemeToggle />
+          {!loading && user && <NotificationBell />}
+          {loading ? null : user ? (
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="ghost" className="rounded-full px-2">
+                  <span className="flex size-7 items-center justify-center rounded-full bg-secondary text-xs font-semibold">
+                    {user.name.slice(0, 1).toUpperCase()}
+                  </span>
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-48">
+                <DropdownMenuLabel>
+                  <div className="text-sm font-medium">{user.name}</div>
+                  <div className="text-xs font-normal text-muted-foreground">@{user.username}</div>
+                </DropdownMenuLabel>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem onClick={() => navigate("/settings")}>
+                  <Settings className="size-4" />
+                  {t("action.settings")}
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  onClick={async () => {
+                    await signOut();
+                    navigate("/login");
+                  }}
+                >
+                  <LogOut className="size-4" />
+                  {t("action.signOut")}
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          ) : (
+            <Button asChild size="sm">
+              <Link to="/login">{t("action.signIn")}</Link>
+            </Button>
+          )}
+        </div>
       </div>
+      <form onSubmit={onSearch} className="border-t px-4 py-2 md:hidden">
+        <div className="relative mx-auto max-w-7xl">
+          <Search className="absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+          <Input
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder={t("search.placeholder")}
+            className="pl-8"
+          />
+        </div>
+      </form>
     </header>
   );
 }

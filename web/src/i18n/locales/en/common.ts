@@ -5,6 +5,7 @@ export default {
     changes: "Changes",
     projects: "Projects",
     groups: "Groups",
+    menu: "Menu",
   },
   action: {
     signIn: "Sign in",
