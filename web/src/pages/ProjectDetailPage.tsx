@@ -132,8 +132,8 @@ export default function ProjectDetailPage() {
   return (
     <div className="flex flex-col gap-4">
       <div className="flex flex-wrap items-center gap-3">
-        <div>
-          <h1 className="flex items-center gap-2 text-xl font-semibold">
+        <div className="min-w-0">
+          <h1 className="flex items-center gap-2 break-all text-xl font-semibold">
             {project}
             {projectState !== "ACTIVE" && (
               <span className="rounded-md bg-muted px-2 py-0.5 text-xs font-medium text-muted-foreground">
@@ -141,9 +141,9 @@ export default function ProjectDetailPage() {
               </span>
             )}
           </h1>
-          <div className="mt-1 flex items-center gap-1.5 font-mono text-xs text-muted-foreground">
-            <Terminal className="size-3" />
-            git clone {window.location.origin}/git/{project}.git
+          <div className="mt-1 flex items-center gap-1.5 break-all font-mono text-xs text-muted-foreground">
+            <Terminal className="size-3 shrink-0" />
+            <span className="min-w-0">git clone {window.location.origin}/git/{project}.git</span>
           </div>
         </div>
         <div className="ml-auto flex items-center gap-2">
