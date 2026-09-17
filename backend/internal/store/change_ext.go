@@ -160,5 +160,9 @@ func (d *DB) DeleteProject(name string) error {
 	if _, err := tx.Exec(`DELETE FROM projects WHERE name=?`, name); err != nil {
 		return err
 	}
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	d.perm.invalidateRules()
+	return nil
 }

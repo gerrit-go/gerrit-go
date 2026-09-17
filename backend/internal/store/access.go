@@ -97,19 +97,32 @@ func (d *DB) ListGroups() ([]*Group, error) {
 
 func (d *DB) DeleteGroup(id int64) error {
 	_, err := d.db.Exec(`DELETE FROM groups WHERE id=? AND system=0`, id)
-	return err
+	if err != nil {
+		return err
+	}
+	d.perm.invalidateAllGroups()
+	d.perm.invalidateRules()
+	return nil
 }
 
 func (d *DB) AddGroupMember(groupID, accountID int64) error {
 	_, err := d.db.Exec(
 		`INSERT INTO group_members(group_id, account_id, added) VALUES(?,?,?)
 		 ON CONFLICT(group_id, account_id) DO NOTHING`, groupID, accountID, now())
-	return err
+	if err != nil {
+		return err
+	}
+	d.perm.invalidateGroups(accountID)
+	return nil
 }
 
 func (d *DB) RemoveGroupMember(groupID, accountID int64) error {
 	_, err := d.db.Exec(`DELETE FROM group_members WHERE group_id=? AND account_id=?`, groupID, accountID)
-	return err
+	if err != nil {
+		return err
+	}
+	d.perm.invalidateGroups(accountID)
+	return nil
 }
 
 func (d *DB) ListGroupMembers(groupID int64) ([]*Account, error) {
@@ -137,6 +150,9 @@ func (d *DB) ListGroupMembers(groupID int64) ([]*Account, error) {
 // GroupsForAccount returns the groups an account belongs to. A nil account
 // (anonymous) maps to the "Anonymous Users" group only.
 func (d *DB) GroupsForAccount(accountID int64) ([]*Group, error) {
+	if groups, ok := d.perm.getGroups(accountID); ok {
+		return groups, nil
+	}
 	rows, err := d.db.Query(`
 		SELECT g.id, g.name, g.description, g.owner_group_id, g.system
 		FROM group_members m JOIN groups g ON g.id = m.group_id
@@ -155,7 +171,11 @@ func (d *DB) GroupsForAccount(accountID int64) ([]*Group, error) {
 		g.System = sys == 1
 		out = append(out, g)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	d.perm.setGroups(accountID, out)
+	return out, nil
 }
 
 // ---------- access rules ----------
@@ -194,6 +214,9 @@ func (d *DB) ListAccessRulesInherited(project string) ([]*AccessRule, error) {
 	if project == "*" {
 		return d.ListAccessRules(project)
 	}
+	if rules, ok := d.perm.getRules(project); ok {
+		return rules, nil
+	}
 	chain, err := d.ProjectParentChain(project)
 	if err != nil {
 		return nil, err
@@ -225,7 +248,11 @@ func (d *DB) ListAccessRulesInherited(project string) ([]*AccessRule, error) {
 		r.Exclusive = excl == 1
 		out = append(out, r)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	d.perm.setRules(project, out)
+	return out, nil
 }
 
 // SetAccessRules replaces all rules of a project with the given set.
@@ -250,7 +277,11 @@ func (d *DB) SetAccessRules(project string, rules []*AccessRule) error {
 			return err
 		}
 	}
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	d.perm.invalidateRules()
+	return nil
 }
 
 // ListAccessRules returns rules for a project plus the global ('*') defaults.

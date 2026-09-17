@@ -139,7 +139,7 @@ func Open(dsn string) (*DB, error) {
 			db.Close()
 			return nil, err
 		}
-		return &DB{db: db, driver: DriverPostgres}, nil
+		return &DB{db: db, driver: DriverPostgres, perm: newPermCache()}, nil
 	}
 	db, err := sql.Open("sqlite", dsn+"?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)")
 	if err != nil {
@@ -150,12 +150,13 @@ func Open(dsn string) (*DB, error) {
 		db.Close()
 		return nil, err
 	}
-	return &DB{db: db, driver: DriverSQLite}, nil
+	return &DB{db: db, driver: DriverSQLite, perm: newPermCache()}, nil
 }
 
 type DB struct {
 	db     *sql.DB
 	driver string
+	perm   *permCache
 }
 
 func (d *DB) Close() error { return d.db.Close() }
@@ -734,7 +735,11 @@ func (d *DB) SetProjectState(name, state string) error {
 // project inherits only from the global '*' defaults.
 func (d *DB) SetProjectParent(name, parent string) error {
 	_, err := d.db.Exec(`UPDATE projects SET parent=? WHERE name=?`, parent, name)
-	return err
+	if err != nil {
+		return err
+	}
+	d.perm.invalidateRules()
+	return nil
 }
 
 // SetProjectDescription updates a project's description.
