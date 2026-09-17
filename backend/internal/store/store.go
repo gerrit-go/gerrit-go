@@ -399,7 +399,14 @@ CREATE TABLE IF NOT EXISTS audit_log (
   detail TEXT NOT NULL DEFAULT '',
   created TEXT NOT NULL
 );
-CREATE INDEX IF NOT EXISTS idx_audit_id ON audit_log(id);`
+CREATE INDEX IF NOT EXISTS idx_audit_id ON audit_log(id);
+CREATE TABLE IF NOT EXISTS project_labels (
+  project TEXT NOT NULL REFERENCES projects(name) ON DELETE CASCADE,
+  label TEXT NOT NULL,
+  value TEXT NOT NULL DEFAULT '',
+  PRIMARY KEY (project, label)
+);
+CREATE INDEX IF NOT EXISTS idx_plabels_label ON project_labels(label, value);`
 
 func migrate(db *sql.DB, drv string) error {
 	schema := schemaSQLite
@@ -753,6 +760,184 @@ func (d *DB) SetProjectParent(name, parent string) error {
 func (d *DB) SetProjectDescription(name, description string) error {
 	_, err := d.db.Exec(`UPDATE projects SET description=? WHERE name=?`, description, name)
 	return err
+}
+
+// ---------- project labels ----------
+
+// SetProjectLabel sets a label on a project. If value is empty the label is
+// set with an empty value (acts as a tag).
+func (d *DB) SetProjectLabel(project, label, value string) error {
+	_, err := d.db.Exec(`INSERT INTO project_labels(project, label, value) VALUES(?,?,?)
+		ON CONFLICT(project, label) DO UPDATE SET value=excluded.value`, project, label, value)
+	return err
+}
+
+// DeleteProjectLabel removes a label from a project.
+func (d *DB) DeleteProjectLabel(project, label string) error {
+	_, err := d.db.Exec(`DELETE FROM project_labels WHERE project=? AND label=?`, project, label)
+	return err
+}
+
+// GetProjectLabels returns all labels for a project as a map.
+func (d *DB) GetProjectLabels(project string) (map[string]string, error) {
+	rows, err := d.db.Query(`SELECT label, value FROM project_labels WHERE project=? ORDER BY label`, project)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]string{}
+	for rows.Next() {
+		var l, v string
+		if err := rows.Scan(&l, &v); err != nil {
+			return nil, err
+		}
+		out[l] = v
+	}
+	return out, rows.Err()
+}
+
+// ListProjectsByLabel returns project names that have the given label,
+// optionally filtered by value (empty value matches any).
+func (d *DB) ListProjectsByLabel(label, value string) ([]string, error) {
+	var rows *sql.Rows
+	var err error
+	if value != "" {
+		rows, err = d.db.Query(`SELECT project FROM project_labels WHERE label=? AND value=? ORDER BY project`, label, value)
+	} else {
+		rows, err = d.db.Query(`SELECT project FROM project_labels WHERE label=? ORDER BY project`, label)
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var p string
+		if err := rows.Scan(&p); err != nil {
+			return nil, err
+		}
+		out = append(out, p)
+	}
+	return out, rows.Err()
+}
+
+// ListProjectsByNamespace returns project names under the given namespace
+// prefix. The namespace matches the project name up to the last '/'.
+// For example, namespace "rk/android/14" matches "rk/android/14/kernel"
+// but not "rk/android/14" itself (that would be a project, not a namespace).
+func (d *DB) ListProjectsByNamespace(ns string) ([]string, error) {
+	pattern := ns + "/%"
+	rows, err := d.db.Query(`SELECT name FROM projects WHERE name LIKE ? ESCAPE '\' ORDER BY name`, pattern)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var p string
+		if err := rows.Scan(&p); err != nil {
+			return nil, err
+		}
+		out = append(out, p)
+	}
+	return out, rows.Err()
+}
+
+// ListAllLabels returns all distinct label keys and their values.
+func (d *DB) ListAllLabels() (map[string][]string, error) {
+	rows, err := d.db.Query(`SELECT DISTINCT label, value FROM project_labels ORDER BY label, value`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string][]string{}
+	for rows.Next() {
+		var l, v string
+		if err := rows.Scan(&l, &v); err != nil {
+			return nil, err
+		}
+		out[l] = append(out[l], v)
+	}
+	return out, rows.Err()
+}
+
+// ProjectNamespace returns the namespace of a project name — everything
+// before the last '/'. Returns "" for top-level projects without '/'.
+func ProjectNamespace(name string) string {
+	i := strings.LastIndex(name, "/")
+	if i < 0 {
+		return ""
+	}
+	return name[:i]
+}
+
+// NamespaceTree builds a tree of namespaces from a list of project names.
+// Each node is a path segment; children are sub-namespaces.
+type NamespaceNode struct {
+	Name     string           `json:"name"`
+	Path     string           `json:"path"`
+	Children []*NamespaceNode `json:"children,omitempty"`
+	Count    int              `json:"count"` // number of projects directly under this namespace
+}
+
+// BuildNamespaceTree constructs the namespace tree from project names.
+func BuildNamespaceTree(projects []string) []*NamespaceNode {
+	if len(projects) == 0 {
+		return nil
+	}
+	// Count projects per namespace.
+	nsCount := map[string]int{}
+	nsSet := map[string]bool{}
+	for _, p := range projects {
+		ns := ProjectNamespace(p)
+		if ns == "" {
+			continue
+		}
+		nsCount[ns]++
+		// Register all ancestor namespaces.
+		for ns != "" {
+			nsSet[ns] = true
+			ns = ProjectNamespace(ns)
+		}
+	}
+
+	// Build tree bottom-up.
+	var build func(prefix string) []*NamespaceNode
+	build = func(prefix string) []*NamespaceNode {
+		var nodes []*NamespaceNode
+		seen := map[string]bool{}
+		for ns := range nsSet {
+			if ProjectNamespace(ns) != prefix {
+				continue
+			}
+			// Get the last segment.
+			name := ns
+			if i := strings.LastIndex(ns, "/"); i >= 0 {
+				name = ns[i+1:]
+			}
+			if seen[name] {
+				continue
+			}
+			seen[name] = true
+			node := &NamespaceNode{
+				Name:     name,
+				Path:     ns,
+				Count:    nsCount[ns],
+				Children: build(ns),
+			}
+			nodes = append(nodes, node)
+		}
+		// Sort by name.
+		for i := 0; i < len(nodes); i++ {
+			for j := i + 1; j < len(nodes); j++ {
+				if nodes[j].Name < nodes[i].Name {
+					nodes[i], nodes[j] = nodes[j], nodes[i]
+				}
+			}
+		}
+		return nodes
+	}
+	return build("")
 }
 
 // ---------- changes ----------

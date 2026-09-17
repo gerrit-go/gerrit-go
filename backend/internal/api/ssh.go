@@ -282,6 +282,8 @@ func (s *Server) sshGerrit(ch ssh.Channel, acct *store.Account, args []string) i
 		return s.sshDeleteTag(ch, acct, args[1:])
 	case "set-project":
 		return s.sshSetProject(ch, acct, args[1:])
+	case "set-label":
+		return s.sshSetLabel(ch, acct, args[1:])
 	default:
 		fmt.Fprintf(ch.Stderr(), "gerrit: unknown subcommand %q\n", args[0])
 		return 1
