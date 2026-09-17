@@ -1009,6 +1009,27 @@ func (d *DB) ListPatchSets(changeNumber int64) ([]*PatchSet, error) {
 	return out, rows.Err()
 }
 
+// ListAllPatchSets returns every patch set across all changes, for the
+// patchset_files backfill.
+func (d *DB) ListAllPatchSets() ([]*PatchSet, error) {
+	rows, err := d.db.Query(`SELECT change_number, number, commit_sha, author_name, author_email, message, created FROM patchsets ORDER BY change_number, number`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []*PatchSet
+	for rows.Next() {
+		p := &PatchSet{}
+		var created string
+		if err := rows.Scan(&p.ChangeNumber, &p.Number, &p.CommitSHA, &p.AuthorName, &p.AuthorEmail, &p.Message, &created); err != nil {
+			return nil, err
+		}
+		p.Created = parseTime(created)
+		out = append(out, p)
+	}
+	return out, rows.Err()
+}
+
 // AddPatchSetFiles records the file paths a patch set touches, replacing any
 // existing rows for that patch set.
 func (d *DB) AddPatchSetFiles(changeNumber int64, psNumber int, paths []string) error {

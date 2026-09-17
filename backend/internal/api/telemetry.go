@@ -4,6 +4,8 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
+	"time"
 
 	"gerrit-go/internal/store"
 )
@@ -259,19 +261,72 @@ func hooksOrEmpty(hooks []*store.Webhook) []*store.Webhook {
 
 // ---------- audit log ----------
 
-// handleBackup creates a repository backup archive (admin only).
+// backupStatus tracks the asynchronous repository backup's state so a large
+// backup does not block the HTTP request that triggered it.
+type backupStatus struct {
+	mu       sync.Mutex
+	Running  bool      `json:"running"`
+	Archive  string    `json:"archive,omitempty"`
+	Error    string    `json:"error,omitempty"`
+	Finished time.Time `json:"finished,omitempty"`
+}
+
+func (b *backupStatus) start() bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.Running {
+		return false
+	}
+	b.Running = true
+	b.Archive = ""
+	b.Error = ""
+	return true
+}
+
+func (b *backupStatus) finish(archive string, err error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.Running = false
+	b.Archive = archive
+	if err != nil {
+		b.Error = err.Error()
+	}
+	b.Finished = time.Now()
+}
+
+func (b *backupStatus) snapshot() backupStatus {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return *b
+}
+
+// handleBackup starts a repository backup in the background (admin only) and
+// returns immediately; poll /admin/backup/status for the result.
 func (s *Server) handleBackup(w http.ResponseWriter, r *http.Request) {
 	acct := s.account(r)
 	if acct == nil || !acct.Admin {
 		s.forbid(w, r, "administrateServer")
 		return
 	}
-	path, err := s.git.BackupRepos()
-	if err != nil {
-		writeErr(w, http.StatusInternalServerError, err.Error())
+	if !s.backupState.start() {
+		writeJSON(w, http.StatusAccepted, map[string]any{"started": false, "running": true})
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"archive": path})
+	go func() {
+		path, err := s.git.BackupRepos()
+		s.backupState.finish(path, err)
+	}()
+	writeJSON(w, http.StatusAccepted, map[string]any{"started": true})
+}
+
+// handleBackupStatus reports the current or last backup state (admin only).
+func (s *Server) handleBackupStatus(w http.ResponseWriter, r *http.Request) {
+	acct := s.account(r)
+	if acct == nil || !acct.Admin {
+		s.forbid(w, r, "administrateServer")
+		return
+	}
+	writeJSON(w, http.StatusOK, s.backupState.snapshot())
 }
 
 // handleListBackups lists existing backup archives (admin only).
@@ -287,6 +342,21 @@ func (s *Server) handleListBackups(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, list)
+}
+
+// handleBackfillFiles backfills patchset_files for older patch sets (admin only).
+func (s *Server) handleBackfillFiles(w http.ResponseWriter, r *http.Request) {
+	acct := s.account(r)
+	if acct == nil || !acct.Admin {
+		s.forbid(w, r, "administrateServer")
+		return
+	}
+	filled, err := s.git.BackfillPatchSetFiles()
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"backfilled": filled})
 }
 
 func (s *Server) handleListAudit(w http.ResponseWriter, r *http.Request) {

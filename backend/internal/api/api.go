@@ -38,6 +38,7 @@ type Server struct {
 	limiter       *loginLimiter
 	sshAddr       string
 	events        *events.Broker
+	backupState   *backupStatus
 }
 
 func NewRouter(db *store.DB, authSvc *auth.Service, gitSvc *gitsvc.Service, notifier *notify.Notifier, staticDir string, allowRegister bool) http.Handler {
@@ -63,6 +64,7 @@ func NewServer(db *store.DB, authSvc *auth.Service, gitSvc *gitsvc.Service, noti
 		allowRegister: allowRegister,
 		limiter:       newLoginLimiter(5, 10*time.Minute, 15*time.Minute),
 		events:        events.NewBroker(),
+		backupState:   &backupStatus{},
 	}
 	gitSvc.OnChangeEvent = s.onGitChangeEvent
 	s.routes()
@@ -212,7 +214,9 @@ func (s *Server) routes() {
 	// Audit log (admin).
 	mux.HandleFunc("GET /admin/audit", s.requireAuth(s.handleListAudit))
 	mux.HandleFunc("POST /admin/backup", s.requireAuth(s.handleBackup))
+	mux.HandleFunc("GET /admin/backup/status", s.requireAuth(s.handleBackupStatus))
 	mux.HandleFunc("GET /admin/backups", s.requireAuth(s.handleListBackups))
+	mux.HandleFunc("POST /admin/backfill-files", s.requireAuth(s.handleBackfillFiles))
 
 	// Prometheus metrics.
 	mux.HandleFunc("GET /metrics", s.metrics.Handler(s.db))

@@ -2309,7 +2309,7 @@ function CommentCard({
   const { t } = useTranslation("changeDetail");
   const suggestion = parseSuggestion(comment.message);
   return (
-    <div className="flex min-w-max gap-2 border-b bg-amber-50/70 px-14 py-2 last:border-b-0 dark:bg-amber-950/20">
+    <div className="flex min-w-0 max-w-[calc(100vw-2rem)] gap-2 border-b bg-amber-50/70 px-4 py-2 last:border-b-0 dark:bg-amber-950/20 sm:px-14">
       <div className="min-w-0 flex-1 font-sans">
         <div className="flex flex-wrap items-center gap-1.5 text-xs">
           <span className="font-semibold">{comment.author.name}</span>
@@ -2382,7 +2382,7 @@ function DraftCard({
 }) {
   const { t } = useTranslation("changeDetail");
   return (
-    <div className="flex min-w-max gap-2 border-b bg-sky-50/70 px-14 py-2 last:border-b-0 dark:bg-sky-950/20">
+    <div className="flex min-w-0 max-w-[calc(100vw-2rem)] gap-2 border-b bg-sky-50/70 px-4 py-2 last:border-b-0 dark:bg-sky-950/20 sm:px-14">
       <div className="min-w-0 flex-1 font-sans">
         <div className="flex items-center gap-1.5 text-xs">
           <Badge variant="secondary" className="gap-1 text-[10px]">
@@ -2424,7 +2424,7 @@ function CommentEditor({
 }) {
   const { t } = useTranslation("changeDetail");
   return (
-    <div className="border-y bg-muted/40 px-14 py-2" onClick={(e) => e.stopPropagation()}>
+    <div className="max-w-[calc(100vw-2rem)] border-y bg-muted/40 px-4 py-2 sm:px-14" onClick={(e) => e.stopPropagation()}>
       <Textarea
         autoFocus
         value={editor.message}
