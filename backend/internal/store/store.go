@@ -161,6 +161,9 @@ type DB struct {
 
 func (d *DB) Close() error { return d.db.Close() }
 
+// Ping verifies the database connection is alive.
+func (d *DB) Ping() error { return d.db.Ping() }
+
 const schemaSQLite = `
 CREATE TABLE IF NOT EXISTS accounts (
   id INTEGER PRIMARY KEY AUTOINCREMENT,

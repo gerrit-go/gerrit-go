@@ -1,12 +1,16 @@
 package main
 
 import (
+	"context"
 	"flag"
-	"log"
+	"log/slog"
 	"net/http"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"strings"
+	"syscall"
+	"time"
 
 	"gerrit-go/internal/api"
 	"gerrit-go/internal/auth"
@@ -47,8 +51,11 @@ func main() {
 	allowRegistration := flag.Bool("allow-registration", false, "allow open self-registration via /register (default off; admins can always create accounts)")
 	flag.Parse()
 
+	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo})))
+
 	if err := os.MkdirAll(filepath.Join(*dataDir, "git"), 0o755); err != nil {
-		log.Fatalf("create data dir: %v", err)
+		slog.Error("create data dir", "err", err)
+		os.Exit(1)
 	}
 
 	dsn := *dbDSN
@@ -59,23 +66,22 @@ func main() {
 		dsn = filepath.Join(*dataDir, "gerrit.db")
 	}
 	if store.IsPostgresDSN(dsn) {
-		log.Printf("using PostgreSQL backend")
+		slog.Info("using PostgreSQL backend")
 	} else {
-		log.Printf("using SQLite backend: %s", dsn)
+		slog.Info("using SQLite backend", "dsn", dsn)
 	}
 	db, err := store.Open(dsn)
 	if err != nil {
-		log.Fatalf("open store: %v", err)
+		slog.Error("open store", "err", err)
+		os.Exit(1)
 	}
 	defer db.Close()
 
 	authSvc := auth.New(db)
 	if pw, created := authSvc.BootstrapAdmin(); created {
-		log.Printf("created initial admin account: username=admin password=%s — record it now, change it immediately, and disable password login if you use SSO", pw)
+		slog.Info("created initial admin account", "username", "admin", "password", pw)
 	}
 
-	// OAuth2/OIDC settings may be supplied via flags or environment, so that
-	// container deployments can keep the client secret out of the process args.
 	envOr := func(v, key string) string {
 		if v != "" {
 			return v
@@ -97,7 +103,7 @@ func main() {
 		Domain:       envOr(*oauthDomain, "GERRIT_GO_OAUTH_DOMAIN"),
 	})
 	if authSvc.OAuthEnabled() {
-		log.Printf("OAuth2/OIDC single sign-on enabled (redirect: %s)", redirectURL)
+		slog.Info("OAuth2/OIDC single sign-on enabled", "redirect", redirectURL)
 	}
 
 	authSvc.ConfigureLDAP(auth.LDAPConfig{
@@ -112,7 +118,7 @@ func main() {
 		Insecure:   *ldapInsecure,
 	})
 	if authSvc.LDAPEnabled() {
-		log.Printf("LDAP/AD authentication enabled (url: %s, base: %s)", *ldapURL, *ldapBaseDN)
+		slog.Info("LDAP/AD authentication enabled", "url", *ldapURL, "base", *ldapBaseDN)
 	}
 
 	gitSvc := gitsvc.New(filepath.Join(*dataDir, "git"), db)
@@ -124,21 +130,40 @@ func main() {
 		From:     *smtpFrom,
 	}, *webURL)
 	if *smtpHost == "" {
-		log.Printf("email notifications disabled (set -smtp-host to enable); in-app notifications active")
+		slog.Info("email notifications disabled; in-app notifications active")
 	}
 	srv := api.NewServer(db, authSvc, gitSvc, notifier, *staticDir, *allowRegistration)
-	handler := srv.Handler()
+
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
 
 	if *sshAddr != "" {
 		go func() {
 			if err := srv.StartSSH(*sshAddr); err != nil {
-				log.Printf("ssh listener stopped: %v", err)
+				slog.Info("ssh listener stopped", "err", err)
 			}
 		}()
 	}
 
-	log.Printf("gerrit-go listening on %s (data dir: %s)", *addr, *dataDir)
-	if err := http.ListenAndServe(*addr, handler); err != nil {
-		log.Fatal(err)
+	httpSrv := &http.Server{
+		Addr:    *addr,
+		Handler: srv.Handler(),
+	}
+
+	go func() {
+		<-ctx.Done()
+		slog.Info("shutting down HTTP server")
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		if err := httpSrv.Shutdown(shutdownCtx); err != nil {
+			slog.Error("HTTP shutdown", "err", err)
+		}
+		srv.CloseSSH()
+	}()
+
+	slog.Info("gerrit-go listening", "addr", *addr, "data", *dataDir)
+	if err := httpSrv.ListenAndServe(); err != http.ErrServerClosed {
+		slog.Error("HTTP server", "err", err)
+		os.Exit(1)
 	}
 }
