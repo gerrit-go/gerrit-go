@@ -351,6 +351,24 @@ func (s *Service) PatchSetDiff(changeNumber int64, psNumber int) ([]*FileDiff, e
 	return patchToFileDiffs(patch), nil
 }
 
+// CommitDiff computes the diff of an arbitrary commit against its first
+// parent, for browsing a commit's changes on the project commits page.
+func (s *Service) CommitDiff(project, sha string) ([]*FileDiff, error) {
+	repo, err := s.OpenRepo(project)
+	if err != nil {
+		return nil, err
+	}
+	commit, err := repo.CommitObject(plumbing.NewHash(sha))
+	if err != nil {
+		return nil, err
+	}
+	patch, err := patchAgainstParent(commit)
+	if err != nil {
+		return nil, err
+	}
+	return patchToFileDiffs(patch), nil
+}
+
 // patchAgainstParent returns the unified diff introduced by the commit
 // (first parent → commit); initial commits diff against the empty tree.
 func patchAgainstParent(commit *object.Commit) (*object.Patch, error) {

@@ -1,8 +1,8 @@
-import { useEffect, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useState } from "react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { Bell, BellOff, ChevronRight, File, Folder, GitCommitHorizontal, Pencil, Terminal } from "lucide-react";
-import { api, type BlameLine, type BranchInfo, type CommitInfo, type FileEntry, type FileLogEntry } from "@/lib/api";
+import { api, type BlameLine, type BranchInfo, type CommitInfo, type FileDiff, type FileEntry, type FileLogEntry } from "@/lib/api";
 import { highlightBlock, highlightLine, langForPath } from "@/lib/highlight";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -44,6 +44,8 @@ export default function ProjectDetailPage() {
   const [branches, setBranches] = useState<BranchInfo[]>([]);
   const [entries, setEntries] = useState<FileEntry[] | null>(null);
   const [commits, setCommits] = useState<CommitInfo[] | null>(null);
+  const [expandedSha, setExpandedSha] = useState<string | null>(null);
+  const [commitDiff, setCommitDiff] = useState<FileDiff[] | null>(null);
   const [fileText, setFileText] = useState<string | null>(null);
   const [fileView, setFileView] = useState<"code" | "blame" | "history">("code");
   const [blameLines, setBlameLines] = useState<BlameLine[] | null>(null);
@@ -125,6 +127,20 @@ export default function ProjectDetailPage() {
     if (value) next.set(key, value);
     else next.delete(key);
     setSearchParams(next);
+  };
+
+  const toggleCommit = (sha: string) => {
+    if (expandedSha === sha) {
+      setExpandedSha(null);
+      setCommitDiff(null);
+      return;
+    }
+    setExpandedSha(sha);
+    setCommitDiff(null);
+    api
+      .commitDiff(project, sha)
+      .then((d) => setCommitDiff(d ?? []))
+      .catch(() => setCommitDiff([]));
   };
 
   if (!project) return null;
@@ -343,30 +359,40 @@ export default function ProjectDetailPage() {
               <Table>
                 <TableBody>
                   {commits.map((c) => (
-                    <TableRow key={c.sha}>
-                      <TableCell className="w-8">
-                        <GitCommitHorizontal className="size-4 text-muted-foreground" />
-                      </TableCell>
-                      <TableCell>
-                        <div className="font-medium">{c.subject}</div>
-                        <div className="text-xs text-muted-foreground">
-                          {c.author} · {timeAgo(c.date)}
-                        </div>
-                      </TableCell>
-                      <TableCell className="text-right font-mono text-xs text-muted-foreground">
-                        <Link
-                          to={`#`}
-                          onClick={(e) => {
-                            e.preventDefault();
-                            navigator.clipboard.writeText(c.sha);
-                          }}
-                          title={t("copyFullSha")}
-                          className="hover:text-foreground"
-                        >
-                          {c.sha.slice(0, 8)}
-                        </Link>
-                      </TableCell>
-                    </TableRow>
+                    <Fragment key={c.sha}>
+                      <TableRow className="cursor-pointer hover:bg-accent/50" onClick={() => toggleCommit(c.sha)}>
+                        <TableCell className="w-8">
+                          <GitCommitHorizontal className="size-4 text-muted-foreground" />
+                        </TableCell>
+                        <TableCell>
+                          <div className="font-medium">{c.subject}</div>
+                          <div className="text-xs text-muted-foreground">
+                            {c.author} · {timeAgo(c.date)}
+                          </div>
+                        </TableCell>
+                        <TableCell className="text-right font-mono text-xs text-muted-foreground">
+                          <Link
+                            to={`#`}
+                            onClick={(e) => {
+                              e.preventDefault();
+                              e.stopPropagation();
+                              navigator.clipboard.writeText(c.sha);
+                            }}
+                            title={t("copyFullSha")}
+                            className="hover:text-foreground"
+                          >
+                            {c.sha.slice(0, 8)}
+                          </Link>
+                        </TableCell>
+                      </TableRow>
+                      {expandedSha === c.sha && (
+                        <TableRow key={c.sha + "-diff"}>
+                          <TableCell colSpan={3} className="bg-muted/20 p-0">
+                          <CommitDiffView diffs={commitDiff} />
+                          </TableCell>
+                        </TableRow>
+                      )}
+                    </Fragment>
                   ))}
                 </TableBody>
               </Table>
@@ -541,4 +567,74 @@ function WatchButton({ project }: { project: string }) {
       {watched ? t("watching") : t("watch")}
     </Button>
   );
+}
+
+function CommitDiffView({ diffs }: { diffs: FileDiff[] | null }) {
+  const { t } = useTranslation("projectDetail");
+  if (diffs === null) {
+    return <Skeleton className="m-4 h-24 w-auto" />;
+  }
+  if (diffs.length === 0) {
+    return <p className="p-4 text-center text-sm text-muted-foreground">{t("noDiff")}</p>;
+  }
+  return (
+    <div className="divide-y font-mono text-xs leading-5">
+      {diffs.map((f) => (
+        <div key={f.path}>
+          <div className="flex items-center gap-2 bg-muted/40 px-4 py-1.5">
+            <FileStatusBadge status={f.status} />
+            <span className="font-medium">{f.path}</span>
+            <span className="ml-auto">
+              <span className="text-emerald-600">+{f.add_count}</span>{" "}
+              <span className="text-red-600">−{f.del_count}</span>
+            </span>
+          </div>
+          {f.binary ? (
+            <p className="px-4 py-2 text-muted-foreground">{t("binaryFile")}</p>
+          ) : (
+            f.hunks.map((h, hi) => (
+              <div key={hi}>
+                <div className="bg-blue-50 px-4 py-0.5 text-[11px] text-blue-700 dark:bg-blue-950/40 dark:text-blue-300">
+                  {h.header}
+                </div>
+                {h.lines.map((l, li) => (
+                  <div
+                    key={li}
+                    className={
+                      l.type === "add"
+                        ? "bg-emerald-50 dark:bg-emerald-950/30"
+                        : l.type === "del"
+                          ? "bg-red-50 dark:bg-red-950/30"
+                          : ""
+                    }
+                  >
+                    <span className="inline-block w-10 select-none border-r px-1 text-right text-muted-foreground/60">
+                      {l.old_no ?? ""}
+                    </span>
+                    <span className="inline-block w-10 select-none border-r px-1 text-right text-muted-foreground/60">
+                      {l.new_no ?? ""}
+                    </span>
+                    <span
+                      className="whitespace-pre-wrap break-all px-2"
+                      dangerouslySetInnerHTML={{ __html: highlightLine(l.text, langForPath(f.path)) }}
+                    />
+                  </div>
+                ))}
+              </div>
+            ))
+          )}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function FileStatusBadge({ status }: { status: string }) {
+  const cls =
+    status === "A"
+      ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-950/50 dark:text-emerald-400"
+      : status === "D"
+        ? "bg-red-100 text-red-700 dark:bg-red-950/50 dark:text-red-400"
+        : "bg-blue-100 text-blue-700 dark:bg-blue-950/50 dark:text-blue-400";
+  return <span className={`rounded px-1.5 py-0.5 text-[10px] font-semibold ${cls}`}>{status}</span>;
 }

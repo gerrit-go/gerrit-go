@@ -18,6 +18,8 @@ export default {
   viewBlame: "Blame",
   viewHistory: "History",
   historyEmpty: "No history for this file.",
+  noDiff: "No changes in this commit.",
+  binaryFile: "Binary file",
   copyFullSha: "Copy full SHA",
   watch: "Watch",
   watching: "Watching",

@@ -120,6 +120,7 @@ func (s *Server) routes() {
 	mux.HandleFunc("GET /projects/{name}", s.handleGetProject)
 	mux.HandleFunc("GET /projects/{name}/branches", s.handleListBranches)
 	mux.HandleFunc("GET /projects/{name}/commits", s.handleListCommits)
+	mux.HandleFunc("GET /projects/{name}/commitdiff", s.handleCommitDiff)
 	mux.HandleFunc("GET /projects/{name}/tree", s.handleListTree)
 	mux.HandleFunc("GET /projects/{name}/file", s.handleFileContent)
 	mux.HandleFunc("GET /projects/{name}/blame", s.handleBlame)

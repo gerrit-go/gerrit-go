@@ -362,6 +362,8 @@ export const api = {
     request<CommitInfo[]>(
       `/projects/${encodeURIComponent(project)}/commits?n=${n}${revision ? `&revision=${encodeURIComponent(revision)}` : ""}`,
     ),
+  commitDiff: (project: string, sha: string) =>
+    request<FileDiff[]>(`/projects/${encodeURIComponent(project)}/commitdiff?sha=${encodeURIComponent(sha)}`),
   tree: (project: string, revision?: string, path?: string) =>
     request<FileEntry[]>(
       `/projects/${encodeURIComponent(project)}/tree?revision=${encodeURIComponent(revision ?? "")}&path=${encodeURIComponent(path ?? "")}`,

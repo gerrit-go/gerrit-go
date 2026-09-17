@@ -18,6 +18,8 @@ export default {
   viewBlame: "追溯",
   viewHistory: "历史",
   historyEmpty: "该文件暂无历史记录。",
+  noDiff: "此提交没有改动。",
+  binaryFile: "二进制文件",
   copyFullSha: "复制完整 SHA",
   watch: "关注",
   watching: "正在关注",

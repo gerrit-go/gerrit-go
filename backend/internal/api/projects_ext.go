@@ -87,6 +87,25 @@ func (s *Server) handleFsck(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"issues": lines, "healthy": len(lines) == 0})
 }
 
+// handleCommitDiff returns the file diffs introduced by a single commit.
+func (s *Server) handleCommitDiff(w http.ResponseWriter, r *http.Request) {
+	project := r.PathValue("name")
+	if !s.ensureProjectRead(w, r, project) {
+		return
+	}
+	sha := r.URL.Query().Get("sha")
+	if sha == "" {
+		writeErr(w, http.StatusBadRequest, "sha is required")
+		return
+	}
+	diffs, err := s.git.CommitDiff(project, sha)
+	if err != nil {
+		writeErr(w, mapGitErr(err), err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, diffs)
+}
+
 // ---------- branches ----------
 
 func (s *Server) handleCreateBranch(w http.ResponseWriter, r *http.Request) {
