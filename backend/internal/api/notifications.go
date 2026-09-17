@@ -100,15 +100,19 @@ func (s *Server) handleWatchProject(w http.ResponseWriter, r *http.Request) {
 	notify := "ALL"
 	var req struct {
 		Notify string `json:"notify"`
+		Branch string `json:"branch"`
+		Author string `json:"author"`
 	}
-	if err := decodeJSON(r, &req); err == nil && req.Notify != "" {
-		notify = req.Notify
+	if err := decodeJSON(r, &req); err == nil {
+		if req.Notify != "" {
+			notify = req.Notify
+		}
 	}
-	if err := s.db.WatchProject(acct.ID, name, notify); err != nil {
+	if err := s.db.WatchProject(acct.ID, name, notify, req.Branch, req.Author); err != nil {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"project": name, "notify": notify, "watched": true})
+	writeJSON(w, http.StatusOK, map[string]any{"project": name, "notify": notify, "branch": req.Branch, "author": req.Author, "watched": true})
 }
 
 func (s *Server) handleUnwatchProject(w http.ResponseWriter, r *http.Request) {

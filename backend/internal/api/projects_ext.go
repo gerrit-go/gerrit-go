@@ -56,6 +56,37 @@ func (s *Server) handleFileLog(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, entries)
 }
 
+// handleGC runs git gc on a project repository (admin only).
+func (s *Server) handleGC(w http.ResponseWriter, r *http.Request) {
+	acct := s.account(r)
+	if acct == nil || !acct.Admin {
+		s.forbid(w, r, "admin")
+		return
+	}
+	out, err := s.git.GC(r.PathValue("name"))
+	if err != nil {
+		writeErr(w, mapGitErr(err), err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"output": out})
+}
+
+// handleFsck runs git fsck on a project repository and returns the report
+// lines (admin only).
+func (s *Server) handleFsck(w http.ResponseWriter, r *http.Request) {
+	acct := s.account(r)
+	if acct == nil || !acct.Admin {
+		s.forbid(w, r, "admin")
+		return
+	}
+	lines, err := s.git.Fsck(r.PathValue("name"))
+	if err != nil {
+		writeErr(w, mapGitErr(err), err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"issues": lines, "healthy": len(lines) == 0})
+}
+
 // ---------- branches ----------
 
 func (s *Server) handleCreateBranch(w http.ResponseWriter, r *http.Request) {

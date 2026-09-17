@@ -20,4 +20,15 @@ export default {
     namePlaceholder: "查询名称",
     share: "分享给所有人",
   },
+  batch: {
+    selected: "已选 {{count}} 项",
+    abandon: "批量废弃",
+    restore: "批量恢复",
+    addReviewer: "批量加评审人",
+    clear: "清除选择",
+    reviewerPrompt: "评审人用户名或邮箱：",
+    done: "已完成 {{done}}/{{total}}",
+    selectAll: "全选",
+    select: "选择",
+  },
 };

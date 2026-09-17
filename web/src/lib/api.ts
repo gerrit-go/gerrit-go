@@ -288,6 +288,8 @@ export interface NotificationList {
 export interface WatchedProjectInfo {
   project: string;
   notify: string;
+  branch?: string;
+  author?: string;
 }
 
 export interface SavedQuery {
@@ -349,10 +351,10 @@ export const api = {
   self: () => request<AccountInfo>("/accounts/self"),
 
   listProjects: () => request<Record<string, ProjectInfo>>("/projects/"),
-  createProject: (name: string, description: string) =>
+  createProject: (name: string, description: string, copyFrom?: string) =>
     request<ProjectInfo>("/projects/", {
       method: "POST",
-      body: JSON.stringify({ name, description }),
+      body: JSON.stringify({ name, description, copy_from: copyFrom || undefined }),
     }),
   branches: (project: string) =>
     request<BranchInfo[]>(`/projects/${encodeURIComponent(project)}/branches`),
@@ -379,6 +381,10 @@ export const api = {
     request<FileLogEntry[]>(
       `/projects/${encodeURIComponent(project)}/file-log?revision=${encodeURIComponent(revision)}&path=${encodeURIComponent(path)}&n=${n}`,
     ),
+  gc: (project: string) =>
+    request<{ output: string }>(`/projects/${encodeURIComponent(project)}/gc`, { method: "POST" }),
+  fsck: (project: string) =>
+    request<{ issues: string[]; healthy: boolean }>(`/projects/${encodeURIComponent(project)}/fsck`),
   projectAccess: (project: string) =>
     request<ProjectAccess>(`/projects/${encodeURIComponent(project)}/access`),
   setProjectAccess: (project: string, rules: AccessRuleInfo[]) =>
@@ -647,10 +653,10 @@ export const api = {
   deleteGlobalWebhook: (id: number) =>
     request<null>(`/config/webhooks/${id}`, { method: "DELETE" }),
 
-  watchProject: (project: string, notify = "ALL") =>
+  watchProject: (project: string, notify = "ALL", branch = "", author = "") =>
     request<{ project: string; notify: string; watched: boolean }>(
       `/projects/${encodeURIComponent(project)}/watch`,
-      { method: "PUT", body: JSON.stringify({ notify }) },
+      { method: "PUT", body: JSON.stringify({ notify, branch, author }) },
     ),
   unwatchProject: (project: string) =>
     request<{ project: string; watched: boolean }>(

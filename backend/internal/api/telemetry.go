@@ -259,6 +259,36 @@ func hooksOrEmpty(hooks []*store.Webhook) []*store.Webhook {
 
 // ---------- audit log ----------
 
+// handleBackup creates a repository backup archive (admin only).
+func (s *Server) handleBackup(w http.ResponseWriter, r *http.Request) {
+	acct := s.account(r)
+	if acct == nil || !acct.Admin {
+		s.forbid(w, r, "administrateServer")
+		return
+	}
+	path, err := s.git.BackupRepos()
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"archive": path})
+}
+
+// handleListBackups lists existing backup archives (admin only).
+func (s *Server) handleListBackups(w http.ResponseWriter, r *http.Request) {
+	acct := s.account(r)
+	if acct == nil || !acct.Admin {
+		s.forbid(w, r, "administrateServer")
+		return
+	}
+	list, err := s.git.ListBackups()
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, list)
+}
+
 func (s *Server) handleListAudit(w http.ResponseWriter, r *http.Request) {
 	acct := s.account(r)
 	if acct == nil || !acct.Admin {

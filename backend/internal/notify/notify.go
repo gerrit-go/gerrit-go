@@ -117,7 +117,11 @@ func (n *Notifier) recipients(ev Event) map[int64]bool {
 			}
 		}
 	}
-	if watchers, err := n.db.ListProjectWatchers(ev.Project); err == nil {
+	actorUsername := ""
+	if actor, err := n.db.GetAccount(ev.ActorID); err == nil {
+		actorUsername = actor.Username
+	}
+	if watchers, err := n.db.ListProjectWatchers(ev.Project, ev.Branch, actorUsername); err == nil {
 		for _, id := range watchers {
 			add(id)
 		}
@@ -134,10 +138,54 @@ func (n *Notifier) renderEmail(ev Event) (subject, body string) {
 		i18n.T(ev.Lang, "email.project", ev.Project),
 		i18n.T(ev.Lang, "email.branch", ev.Branch),
 		i18n.T(ev.Lang, "email.change", ev.ChangeNumber))
+
+	// Change context: owner, current patch set, vote summary, comment count.
+	if c, err := n.db.GetChange(ev.ChangeNumber); err == nil {
+		if owner, err := n.db.GetAccount(c.OwnerID); err == nil {
+			name := owner.FullName
+			if name == "" {
+				name = owner.Username
+			}
+			fmt.Fprintf(&b, "%s\n", i18n.T(ev.Lang, "email.owner", name))
+		}
+		fmt.Fprintf(&b, "%s\n", i18n.T(ev.Lang, "email.patchSet", c.CurrentPS))
+		if votes, err := n.db.ListVotes(ev.ChangeNumber); err == nil {
+			if summary := summarizeVotes(votes, c.CurrentPS); summary != "" {
+				fmt.Fprintf(&b, "%s\n", i18n.T(ev.Lang, "email.votes", summary))
+			}
+		}
+		if comments, err := n.db.ListComments(ev.ChangeNumber); err == nil && len(comments) > 0 {
+			fmt.Fprintf(&b, "%s\n", i18n.T(ev.Lang, "email.comments", len(comments)))
+		}
+	}
 	if n.baseURL != "" {
 		fmt.Fprintf(&b, "\n%s/c/%d\n", n.baseURL, ev.ChangeNumber)
 	}
 	return subject, b.String()
+}
+
+// summarizeVotes renders the net vote per label on the given patch set, e.g.
+// "Code-Review+2, Verified+1". Returns "" when there are no votes.
+func summarizeVotes(votes []*store.VoteInfo, ps int) string {
+	net := map[string]int{}
+	var order []string
+	for _, v := range votes {
+		if v.PatchSet != ps {
+			continue
+		}
+		if _, seen := net[v.Label]; !seen {
+			order = append(order, v.Label)
+		}
+		net[v.Label] += v.Value
+	}
+	var parts []string
+	for _, label := range order {
+		if net[label] == 0 {
+			continue
+		}
+		parts = append(parts, fmt.Sprintf("%s%+d", label, net[label]))
+	}
+	return strings.Join(parts, ", ")
 }
 
 func (n *Notifier) sendEmails(to []string, subject, body string) {

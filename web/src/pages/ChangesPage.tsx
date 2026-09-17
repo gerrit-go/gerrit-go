@@ -98,6 +98,50 @@ export default function ChangesPage() {
   const [error, setError] = useState("");
   const [savedQueries, setSavedQueries] = useState<SavedQuery[]>([]);
   const [saveOpen, setSaveOpen] = useState(false);
+  const [selected, setSelected] = useState<Set<number>>(new Set());
+  const [batchBusy, setBatchBusy] = useState(false);
+  const [batchMsg, setBatchMsg] = useState("");
+
+  const toggleSelect = (num: number) => {
+    setSelected((s) => {
+      const next = new Set(s);
+      if (next.has(num)) next.delete(num);
+      else next.add(num);
+      return next;
+    });
+  };
+
+  const toggleSelectAll = () => {
+    if (!changes) return;
+    if (selected.size === changes.length) setSelected(new Set());
+    else setSelected(new Set(changes.map((c) => c._number)));
+  };
+
+  const batchAction = async (action: "abandon" | "restore" | "reviewer") => {
+    if (selected.size === 0) return;
+    let reviewer = "";
+    if (action === "reviewer") {
+      reviewer = window.prompt(t("batch.reviewerPrompt"))?.trim() ?? "";
+      if (!reviewer) return;
+    }
+    setBatchBusy(true);
+    setBatchMsg("");
+    let done = 0;
+    for (const num of selected) {
+      try {
+        if (action === "abandon") await api.abandon(num);
+        else if (action === "restore") await api.restore(num);
+        else await api.addReviewer(num, reviewer);
+        done++;
+      } catch {
+        /* skip failures */
+      }
+    }
+    setBatchBusy(false);
+    setBatchMsg(t("batch.done", { done, total: selected.size }));
+    setSelected(new Set());
+    load();
+  };
 
   useEffect(() => {
     if (!user) {
@@ -252,6 +296,25 @@ export default function ChangesPage() {
 
       {error && <p className="text-sm text-destructive">{error}</p>}
 
+      {user && selected.size > 0 && (
+        <div className="flex flex-wrap items-center gap-2 rounded-lg border bg-muted/30 px-3 py-2">
+          <span className="text-sm text-muted-foreground">{t("batch.selected", { count: selected.size })}</span>
+          <Button size="sm" variant="outline" disabled={batchBusy} onClick={() => batchAction("abandon")}>
+            {t("batch.abandon")}
+          </Button>
+          <Button size="sm" variant="outline" disabled={batchBusy} onClick={() => batchAction("restore")}>
+            {t("batch.restore")}
+          </Button>
+          <Button size="sm" variant="outline" disabled={batchBusy} onClick={() => batchAction("reviewer")}>
+            {t("batch.addReviewer")}
+          </Button>
+          <Button size="sm" variant="ghost" disabled={batchBusy} onClick={() => setSelected(new Set())}>
+            {t("batch.clear")}
+          </Button>
+          {batchMsg && <span className="text-sm text-muted-foreground">{batchMsg}</span>}
+        </div>
+      )}
+
       {changes === null ? (
         <div className="flex flex-col gap-2">
           {Array.from({ length: 6 }).map((_, i) => (
@@ -270,6 +333,16 @@ export default function ChangesPage() {
           <Table>
             <TableHeader>
               <TableRow className="hover:bg-transparent">
+                {user && (
+                  <TableHead className="w-8">
+                    <input
+                      type="checkbox"
+                      checked={changes.length > 0 && selected.size === changes.length}
+                      onChange={toggleSelectAll}
+                      aria-label={t("batch.selectAll")}
+                    />
+                  </TableHead>
+                )}
                 {user && <TableHead className="w-8" />}
                 <TableHead className="w-16">{t("number")}</TableHead>
                 <TableHead>{t("common:common.subject")}</TableHead>
@@ -283,6 +356,17 @@ export default function ChangesPage() {
             <TableBody>
               {changes.map((c) => (
                 <TableRow key={c._number} className="cursor-pointer" onClick={() => (window.location.href = `/c/${c._number}`)}>
+                  {user && (
+                    <TableCell className="pr-0">
+                      <input
+                        type="checkbox"
+                        checked={selected.has(c._number)}
+                        onChange={() => toggleSelect(c._number)}
+                        onClick={(e) => e.stopPropagation()}
+                        aria-label={t("batch.select")}
+                      />
+                    </TableCell>
+                  )}
                   {user && (
                     <TableCell className="pr-0">
                       <button

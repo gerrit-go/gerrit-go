@@ -320,6 +320,8 @@ CREATE TABLE IF NOT EXISTS watched_projects (
   account_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
   project TEXT NOT NULL,
   notify TEXT NOT NULL DEFAULT 'ALL',
+  branch TEXT NOT NULL DEFAULT '',
+  author TEXT NOT NULL DEFAULT '',
   added TEXT NOT NULL,
   PRIMARY KEY (account_id, project)
 );
@@ -434,6 +436,14 @@ func migrate(db *sql.DB, drv string) error {
 		{"robot_run_id", "robot_run_id TEXT NOT NULL DEFAULT ''"},
 	} {
 		if err := addColumnIfMissing(db, drv, "comments", col.name, col.def); err != nil {
+			return err
+		}
+	}
+	for _, col := range []struct{ name, def string }{
+		{"branch", "branch TEXT NOT NULL DEFAULT ''"},
+		{"author", "author TEXT NOT NULL DEFAULT ''"},
+	} {
+		if err := addColumnIfMissing(db, drv, "watched_projects", col.name, col.def); err != nil {
 			return err
 		}
 	}

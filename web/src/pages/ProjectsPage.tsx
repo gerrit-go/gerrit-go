@@ -28,6 +28,7 @@ export default function ProjectsPage() {
   const [open, setOpen] = useState(false);
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
+  const [copyFrom, setCopyFrom] = useState("");
   const [busy, setBusy] = useState(false);
 
   const load = () =>
@@ -48,10 +49,11 @@ export default function ProjectsPage() {
     setBusy(true);
     setError("");
     try {
-      await api.createProject(name.trim(), description.trim());
+      await api.createProject(name.trim(), description.trim(), copyFrom.trim() || undefined);
       setOpen(false);
       setName("");
       setDescription("");
+      setCopyFrom("");
       await load();
     } catch (err) {
       setError((err as Error).message);
@@ -95,6 +97,15 @@ export default function ProjectsPage() {
                     value={description}
                     onChange={(e) => setDescription(e.target.value)}
                     rows={3}
+                  />
+                </div>
+                <div className="flex flex-col gap-2">
+                  <Label htmlFor="proj-copy">{t("copyFrom")}</Label>
+                  <Input
+                    id="proj-copy"
+                    value={copyFrom}
+                    onChange={(e) => setCopyFrom(e.target.value)}
+                    placeholder={t("copyFromPlaceholder")}
                   />
                 </div>
                 {error && <p className="text-sm text-destructive">{error}</p>}

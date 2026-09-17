@@ -30,6 +30,12 @@ export default {
     restore: "Restore (Active)",
     archive: "Archive (Read-only)",
     hide: "Hide",
+    maintenance: "Repository maintenance",
+    maintenanceDesc: "Pack loose objects and verify repository integrity.",
+    runGC: "Run GC",
+    checkConsistency: "Check consistency",
+    gcDone: "GC completed.",
+    fsckHealthy: "No issues found.",
     deleteProject: "Delete project",
     deleteDescription:
       "Permanently deletes the repository, all of its changes, comments and votes. This cannot be undone.",

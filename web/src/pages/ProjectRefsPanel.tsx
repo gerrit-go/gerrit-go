@@ -305,6 +305,7 @@ export function ManagePanel({
   const [error, setError] = useState("");
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [confirmText, setConfirmText] = useState("");
+  const [maintMsg, setMaintMsg] = useState("");
 
   if (!isAdmin) {
     return (
@@ -313,6 +314,34 @@ export function ManagePanel({
       </p>
     );
   }
+
+  const doGC = async () => {
+    setBusy(true);
+    setError("");
+    setMaintMsg("");
+    try {
+      const res = await api.gc(project);
+      setMaintMsg(res.output.trim() || t("manage.gcDone"));
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const doFsck = async () => {
+    setBusy(true);
+    setError("");
+    setMaintMsg("");
+    try {
+      const res = await api.fsck(project);
+      setMaintMsg(res.healthy ? t("manage.fsckHealthy") : res.issues.join("\n"));
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
 
   const setState = async (next: string) => {
     setBusy(true);
@@ -373,6 +402,20 @@ export function ManagePanel({
             </Button>
           )}
         </div>
+      </section>
+
+      <section className="flex flex-col gap-2">
+        <h2 className="text-sm font-semibold">{t("manage.maintenance")}</h2>
+        <p className="text-xs text-muted-foreground">{t("manage.maintenanceDesc")}</p>
+        <div className="flex gap-2">
+          <Button size="sm" variant="outline" onClick={doGC} disabled={busy}>
+            {t("manage.runGC")}
+          </Button>
+          <Button size="sm" variant="outline" onClick={doFsck} disabled={busy}>
+            {t("manage.checkConsistency")}
+          </Button>
+        </div>
+        {maintMsg && <p className="whitespace-pre-wrap rounded bg-muted/40 p-2 font-mono text-xs">{maintMsg}</p>}
       </section>
 
       <section className="flex flex-col gap-2 rounded-lg border border-destructive/40 p-4">

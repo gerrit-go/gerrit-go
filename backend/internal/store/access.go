@@ -435,17 +435,18 @@ func (d *DB) DeleteSavedQuery(accountID, id int64) error {
 
 // ---------- watched projects ----------
 
-// WatchProject records that accountID watches project. notify controls the email
-// verbosity (ALL, NONE, OWN_COMMENTS); only ALL/OWN_COMMENTS generate in-app
-// notifications, NONE is stored but suppressed.
-func (d *DB) WatchProject(accountID int64, project, notify string) error {
+// WatchProject records that accountID watches project with optional branch and
+// author filters (empty = match all). notify controls the email verbosity (ALL,
+// NONE, OWN_COMMENTS); only ALL/OWN_COMMENTS generate in-app notifications,
+// NONE is stored but suppressed.
+func (d *DB) WatchProject(accountID int64, project, notify, branch, author string) error {
 	if notify == "" {
 		notify = "ALL"
 	}
 	_, err := d.db.Exec(
-		`INSERT INTO watched_projects(account_id, project, notify, added) VALUES(?,?,?,?)
-		 ON CONFLICT(account_id, project) DO UPDATE SET notify=excluded.notify`,
-		accountID, project, notify, now())
+		`INSERT INTO watched_projects(account_id, project, notify, branch, author, added) VALUES(?,?,?,?,?,?)
+		 ON CONFLICT(account_id, project) DO UPDATE SET notify=excluded.notify, branch=excluded.branch, author=excluded.author`,
+		accountID, project, notify, branch, author, now())
 	return err
 }
 
@@ -470,14 +471,16 @@ func (d *DB) WatchSetting(accountID int64, project string) string {
 	return notify
 }
 
-// WatchedProject pairs a project name with its notify setting.
+// WatchedProject pairs a project name with its notify setting and filters.
 type WatchedProject struct {
 	Project string `json:"project"`
 	Notify  string `json:"notify"`
+	Branch  string `json:"branch,omitempty"`
+	Author  string `json:"author,omitempty"`
 }
 
 func (d *DB) ListWatchedProjects(accountID int64) ([]WatchedProject, error) {
-	rows, err := d.db.Query(`SELECT project, notify FROM watched_projects WHERE account_id=? ORDER BY project`, accountID)
+	rows, err := d.db.Query(`SELECT project, notify, branch, author FROM watched_projects WHERE account_id=? ORDER BY project`, accountID)
 	if err != nil {
 		return nil, err
 	}
@@ -485,7 +488,7 @@ func (d *DB) ListWatchedProjects(accountID int64) ([]WatchedProject, error) {
 	var out []WatchedProject
 	for rows.Next() {
 		var wp WatchedProject
-		if err := rows.Scan(&wp.Project, &wp.Notify); err != nil {
+		if err := rows.Scan(&wp.Project, &wp.Notify, &wp.Branch, &wp.Author); err != nil {
 			return nil, err
 		}
 		out = append(out, wp)
@@ -493,10 +496,15 @@ func (d *DB) ListWatchedProjects(accountID int64) ([]WatchedProject, error) {
 	return out, rows.Err()
 }
 
-// ListProjectWatchers returns account IDs watching project, excluding accounts
+// ListProjectWatchers returns account IDs watching project whose branch and
+// author filters match the event (empty filter = match all), excluding accounts
 // whose notify setting is NONE.
-func (d *DB) ListProjectWatchers(project string) ([]int64, error) {
-	rows, err := d.db.Query(`SELECT account_id FROM watched_projects WHERE project=? AND notify != 'NONE'`, project)
+func (d *DB) ListProjectWatchers(project, branch, authorUsername string) ([]int64, error) {
+	rows, err := d.db.Query(
+		`SELECT account_id FROM watched_projects
+		 WHERE project=? AND notify != 'NONE'
+		   AND (branch='' OR branch=?)
+		   AND (author='' OR author=?)`, project, branch, authorUsername)
 	if err != nil {
 		return nil, err
 	}

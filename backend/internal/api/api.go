@@ -124,6 +124,8 @@ func (s *Server) routes() {
 	mux.HandleFunc("GET /projects/{name}/file", s.handleFileContent)
 	mux.HandleFunc("GET /projects/{name}/blame", s.handleBlame)
 	mux.HandleFunc("GET /projects/{name}/file-log", s.handleFileLog)
+	mux.HandleFunc("POST /projects/{name}/gc", s.requireAuth(s.handleGC))
+	mux.HandleFunc("GET /projects/{name}/fsck", s.requireAuth(s.handleFsck))
 	mux.HandleFunc("GET /projects/{name}/access", s.handleGetAccess)
 	mux.HandleFunc("PUT /projects/{name}/access", s.requireAuth(s.handleSetAccess))
 	mux.HandleFunc("PUT /projects/{name}/config", s.requireAuth(s.handleSetProjectConfig))
@@ -208,6 +210,8 @@ func (s *Server) routes() {
 
 	// Audit log (admin).
 	mux.HandleFunc("GET /admin/audit", s.requireAuth(s.handleListAudit))
+	mux.HandleFunc("POST /admin/backup", s.requireAuth(s.handleBackup))
+	mux.HandleFunc("GET /admin/backups", s.requireAuth(s.handleListBackups))
 
 	// Prometheus metrics.
 	mux.HandleFunc("GET /metrics", s.metrics.Handler(s.db))
@@ -623,6 +627,7 @@ func (s *Server) handleCreateProject(w http.ResponseWriter, r *http.Request) {
 		Name        string `json:"name"`
 		Description string `json:"description"`
 		Parent      string `json:"parent"`
+		CopyFrom    string `json:"copy_from"`
 	}
 	if err := decodeJSON(r, &req); err != nil || req.Name == "" {
 		writeErr(w, http.StatusBadRequest, "name is required")
@@ -633,6 +638,15 @@ func (s *Server) handleCreateProject(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	var template *store.Project
+	if req.CopyFrom != "" {
+		tp, err := s.db.GetProject(req.CopyFrom)
+		if err != nil {
+			writeErr(w, http.StatusBadRequest, "copy_from project not found")
+			return
+		}
+		template = tp
+	}
 	if err := s.git.CreateProject(req.Name, req.Description); err != nil {
 		code := http.StatusInternalServerError
 		if errors.Is(err, gitsvc.ErrProjectExists) {
@@ -641,13 +655,49 @@ func (s *Server) handleCreateProject(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, code, err.Error())
 		return
 	}
-	if req.Parent != "" {
-		if err := s.db.SetProjectParent(req.Name, req.Parent); err != nil {
+	if template != nil {
+		// Copy the template's config and access rules instead of seeding defaults.
+		parent := template.Parent
+		if req.Parent != "" {
+			parent = req.Parent
+		}
+		if parent != "" {
+			if err := s.db.SetProjectParent(req.Name, parent); err != nil {
+				writeErr(w, http.StatusInternalServerError, err.Error())
+				return
+			}
+		}
+		if err := s.db.SetProjectSubmitType(req.Name, template.SubmitType, template.SubmitWholeTopic); err != nil {
 			writeErr(w, http.StatusInternalServerError, err.Error())
 			return
 		}
+		if reqs, err := s.db.ListSubmitRequirements(template.Name); err == nil {
+			for _, sr := range reqs {
+				sr.Project = req.Name
+			}
+			_ = s.db.SetSubmitRequirements(req.Name, reqs)
+		}
+		if rules, err := s.db.ListAccessRules(template.Name); err == nil {
+			local := make([]*store.AccessRule, 0, len(rules))
+			for _, rule := range rules {
+				if rule.Project == template.Name {
+					rule.Project = req.Name
+					local = append(local, rule)
+				}
+			}
+			_ = s.db.SetAccessRules(req.Name, local)
+		} else {
+			s.seedProjectAccess(req.Name, acct)
+		}
+	} else {
+		if req.Parent != "" {
+			if err := s.db.SetProjectParent(req.Name, req.Parent); err != nil {
+				writeErr(w, http.StatusInternalServerError, err.Error())
+				return
+			}
+		}
+		s.seedProjectAccess(req.Name, acct)
 	}
-	s.seedProjectAccess(req.Name, acct)
 	writeJSON(w, http.StatusCreated, map[string]any{"name": req.Name, "description": req.Description, "parent": req.Parent})
 }
 

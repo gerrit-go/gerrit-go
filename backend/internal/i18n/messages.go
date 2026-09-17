@@ -42,6 +42,10 @@ var enMessages = map[string]string{
 	"email.project": "Project: %s",
 	"email.branch":  "Branch:  %s",
 	"email.change":  "Change:  %d",
+	"email.owner":   "Owner:   %s",
+	"email.patchSet": "Patch set: %d",
+	"email.votes":   "Votes:   %s",
+	"email.comments": "Inline comments: %d",
 
 	// Common API errors surfaced to the user.
 	"err.authRequired":       "authentication required",
@@ -94,6 +98,10 @@ var zhMessages = map[string]string{
 	"email.project": "项目：%s",
 	"email.branch":  "分支：%s",
 	"email.change":  "变更：%d",
+	"email.owner":   "所有者：%s",
+	"email.patchSet": "补丁集：%d",
+	"email.votes":   "投票：%s",
+	"email.comments": "行内评论：%d 条",
 
 	"err.authRequired":       "需要身份验证",
 	"err.invalidCredentials": "用户名或密码无效",

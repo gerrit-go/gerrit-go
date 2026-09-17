@@ -20,4 +20,15 @@ export default {
     namePlaceholder: "Query name",
     share: "Share with everyone",
   },
+  batch: {
+    selected: "{{count}} selected",
+    abandon: "Abandon",
+    restore: "Restore",
+    addReviewer: "Add reviewer",
+    clear: "Clear",
+    reviewerPrompt: "Reviewer username or email:",
+    done: "{{done}}/{{total}} done",
+    selectAll: "Select all",
+    select: "Select",
+  },
 };
