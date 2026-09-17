@@ -44,14 +44,29 @@ func (s *Server) StartSSH(addr string) error {
 	if err != nil {
 		return err
 	}
+	s.sshListener = ln
 	fmt.Fprintf(os.Stderr, "gerrit-go ssh listening on %s\n", addr)
 	for {
 		nConn, err := ln.Accept()
 		if err != nil {
+			if isClosedErr(err) {
+				return nil
+			}
 			return err
 		}
 		go s.serveSSHConn(nConn, config)
 	}
+}
+
+// CloseSSH shuts down the SSH listener, causing StartSSH to return.
+func (s *Server) CloseSSH() {
+	if s.sshListener != nil {
+		s.sshListener.Close()
+	}
+}
+
+func isClosedErr(err error) bool {
+	return err != nil && (err == net.ErrClosed || strings.Contains(err.Error(), "use of closed network connection"))
 }
 
 // sshAuth authenticates a connection by matching the presented public key

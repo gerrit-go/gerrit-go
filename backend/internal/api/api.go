@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"path"
@@ -37,6 +38,7 @@ type Server struct {
 	allowRegister bool
 	limiter       *loginLimiter
 	sshAddr       string
+	sshListener   net.Listener
 	events        *events.Broker
 	backupState   *backupStatus
 }
@@ -78,6 +80,20 @@ func (s *Server) Handler() http.Handler {
 
 func (s *Server) routes() {
 	mux := s.mux
+
+	// Health checks.
+	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprintln(w, "ok")
+	})
+	mux.HandleFunc("GET /readyz", func(w http.ResponseWriter, r *http.Request) {
+		if err := s.db.Ping(); err != nil {
+			http.Error(w, "db unreachable", http.StatusServiceUnavailable)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprintln(w, "ok")
+	})
 
 	// Git smart HTTP (clone / fetch / push, incl. refs/for magic branch),
 	// served by the system `git http-backend` for full protocol compatibility.
