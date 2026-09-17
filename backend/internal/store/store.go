@@ -833,6 +833,15 @@ func (d *DB) GetChangeByChangeID(project, branch, changeID string) (*Change, err
 	return scanChange(row.Scan)
 }
 
+// GetChangeByChangeIDOnly looks up a change by its Change-Id alone.
+func (d *DB) GetChangeByChangeIDOnly(changeID string) (*Change, error) {
+	row := d.db.QueryRow(`
+		SELECT `+changeCols+`
+		FROM changes ch JOIN accounts a ON a.id = ch.owner_id
+		WHERE ch.change_id=?`, changeID)
+	return scanChange(row.Scan)
+}
+
 // ChangeQuery is the parsed form of a Gerrit-style change search.
 type ChangeQuery struct {
 	Status       string

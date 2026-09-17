@@ -70,6 +70,7 @@ func NewServer(db *store.DB, authSvc *auth.Service, gitSvc *gitsvc.Service, noti
 	}
 	gitSvc.OnChangeEvent = s.onGitChangeEvent
 	s.routes()
+	s.compatRoutes()
 	return s
 }
 
