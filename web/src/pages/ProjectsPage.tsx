@@ -133,11 +133,11 @@ export default function ProjectsPage() {
       ) : (
         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
           {projects.map((p) => (
-            <Card key={p.name} className="gap-3 py-4 transition-shadow hover:shadow-md">
+            <Card key={p.name} className="min-w-0 gap-3 py-4 transition-shadow hover:shadow-md">
               <CardHeader className="px-4">
-                <CardTitle className="flex items-center gap-2 text-base">
-                  <FolderGit2 className="size-4 text-muted-foreground" />
-                  <Link to={`/projects/${encodeURIComponent(p.name)}`} className="hover:underline">
+                <CardTitle className="flex min-w-0 items-center gap-2 text-base">
+                  <FolderGit2 className="size-4 shrink-0 text-muted-foreground" />
+                  <Link to={`/projects/${encodeURIComponent(p.name)}`} className="min-w-0 break-all hover:underline">
                     {p.name}
                   </Link>
                 </CardTitle>
@@ -148,7 +148,7 @@ export default function ProjectsPage() {
               <CardContent className="px-4">
                 <div className="flex items-center gap-1.5 rounded-md bg-muted px-2 py-1 font-mono text-xs text-muted-foreground">
                   <Terminal className="size-3 shrink-0" />
-                  <span className="truncate">git clone {window.location.origin}/git/{p.name}.git</span>
+                  <span className="min-w-0 truncate">git clone {window.location.origin}/git/{p.name}.git</span>
                 </div>
               </CardContent>
             </Card>
