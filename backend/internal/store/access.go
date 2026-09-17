@@ -389,6 +389,34 @@ func (d *DB) IsStarred(accountID, changeNumber int64) bool {
 	return n > 0
 }
 
+// ListStarredBatch returns the subset of changeNumbers starred by accountID.
+func (d *DB) ListStarredBatch(accountID int64, changeNumbers []int64) (map[int64]bool, error) {
+	out := map[int64]bool{}
+	if len(changeNumbers) == 0 {
+		return out, nil
+	}
+	ph := make([]string, len(changeNumbers))
+	args := make([]any, 0, len(changeNumbers)+1)
+	args = append(args, accountID)
+	for i, n := range changeNumbers {
+		ph[i] = "?"
+		args = append(args, n)
+	}
+	rows, err := d.db.Query(`SELECT change_number FROM starred WHERE account_id=? AND change_number IN (`+strings.Join(ph, ",")+`)`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var n int64
+		if err := rows.Scan(&n); err != nil {
+			return nil, err
+		}
+		out[n] = true
+	}
+	return out, rows.Err()
+}
+
 func (d *DB) ListStarred(accountID int64) ([]int64, error) {
 	rows, err := d.db.Query(`SELECT change_number FROM starred WHERE account_id=?`, accountID)
 	if err != nil {
