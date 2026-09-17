@@ -376,3 +376,138 @@ func (s *Server) sshSetProject(ch ssh.Channel, acct *store.Account, args []strin
 	fmt.Fprintf(ch, "updated project %s\n", name)
 	return 0
 }
+
+// sshSetLabel sets or deletes labels on projects.
+// Usage:
+//   gerrit set-label <project> key=value [key2=value2...]
+//   gerrit set-label <project> --delete key [key2...]
+//   gerrit set-label --pattern <glob> key=value [key2=value2...]
+func (s *Server) sshSetLabel(ch ssh.Channel, acct *store.Account, args []string) int {
+	if !sshRequireAuth(ch, acct) {
+		return 1
+	}
+	var pattern, project string
+	var sets []string
+	var deletes []string
+	deleteMode := false
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		switch {
+		case a == "--pattern" && i+1 < len(args):
+			i++
+			pattern = args[i]
+		case strings.HasPrefix(a, "--pattern="):
+			pattern = strings.TrimPrefix(a, "--pattern=")
+		case a == "--delete":
+			deleteMode = true
+		case !strings.HasPrefix(a, "-") && project == "" && pattern == "":
+			project = a
+		case !strings.HasPrefix(a, "-"):
+			if deleteMode {
+				deletes = append(deletes, a)
+			} else {
+				sets = append(sets, a)
+			}
+		}
+	}
+
+	// Resolve target projects.
+	var targets []string
+	if pattern != "" {
+		list, err := s.db.ListProjects()
+		if err != nil {
+			fmt.Fprintf(ch.Stderr(), "set-label failed: %v\n", err)
+			return 1
+		}
+		for _, p := range list {
+			if matchGlob(pattern, p.Name) {
+				targets = append(targets, p.Name)
+			}
+		}
+		if len(targets) == 0 {
+			fmt.Fprintf(ch.Stderr(), "no projects match pattern %q\n", pattern)
+			return 1
+		}
+	} else if project != "" {
+		if _, err := s.db.GetProject(project); err != nil {
+			fmt.Fprintln(ch.Stderr(), "project not found")
+			return 1
+		}
+		targets = []string{project}
+	} else {
+		fmt.Fprintln(ch.Stderr(), "usage: gerrit set-label <project>|--pattern <glob> key=value [...] | --delete key [...]")
+		return 1
+	}
+
+	// Check permission on first target (admin or project owner).
+	if !s.canEditAccess(acct, targets[0]) {
+		fmt.Fprintln(ch.Stderr(), "editAccess not permitted")
+		return 1
+	}
+
+	updated := 0
+	for _, name := range targets {
+		for _, kv := range sets {
+			key, value, _ := strings.Cut(kv, "=")
+			if key == "" {
+				continue
+			}
+			if err := s.db.SetProjectLabel(name, key, value); err != nil {
+				fmt.Fprintf(ch.Stderr(), "set-label %s on %s failed: %v\n", key, name, err)
+				return 1
+			}
+		}
+		for _, key := range deletes {
+			if err := s.db.DeleteProjectLabel(name, key); err != nil {
+				fmt.Fprintf(ch.Stderr(), "delete-label %s on %s failed: %v\n", key, name, err)
+				return 1
+			}
+		}
+		updated++
+	}
+	fmt.Fprintf(ch, "updated %d project(s)\n", updated)
+	return 0
+}
+
+// matchGlob does simple glob matching: * matches any sequence, ? matches one char.
+func matchGlob(pattern, name string) bool {
+	return globMatch(pattern, name)
+}
+
+func globMatch(pattern, name string) bool {
+	if pattern == "" {
+		return name == ""
+	}
+	if pattern == "*" {
+		return true
+	}
+	// Find the first literal segment.
+	i := strings.IndexAny(pattern, "*?")
+	if i < 0 {
+		return pattern == name
+	}
+	// Match prefix literally.
+	if i > 0 {
+		if len(name) < i || pattern[:i] != name[:i] {
+			return false
+		}
+		pattern = pattern[i:]
+		name = name[i:]
+	}
+	switch pattern[0] {
+	case '*':
+		// Try matching rest at every position.
+		for j := 0; j <= len(name); j++ {
+			if globMatch(pattern[1:], name[j:]) {
+				return true
+			}
+		}
+		return false
+	case '?':
+		if len(name) == 0 {
+			return false
+		}
+		return globMatch(pattern[1:], name[1:])
+	}
+	return false
+}

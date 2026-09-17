@@ -159,6 +159,10 @@ func (s *Server) routes() {
 	mux.HandleFunc("PUT /projects/{name}/edit", s.requireAuth(s.handleEditFile))
 	mux.HandleFunc("PUT /projects/{name}/state", s.requireAuth(s.handleSetProjectState))
 	mux.HandleFunc("DELETE /projects/{name}", s.requireAuth(s.handleDeleteProject))
+	mux.HandleFunc("GET /projects/{name}/labels", s.handleGetProjectLabels)
+	mux.HandleFunc("PUT /projects/{name}/labels", s.requireAuth(s.handleSetProjectLabels))
+	mux.HandleFunc("GET /namespaces/", s.handleListNamespaces)
+	mux.HandleFunc("GET /labels/", s.handleListLabels)
 
 	// Groups.
 	mux.HandleFunc("GET /groups/", s.handleListGroups)
@@ -619,25 +623,128 @@ func (s *Server) gitMiddleware() http.Handler {
 // ---------- projects ----------
 
 func (s *Server) handleListProjects(w http.ResponseWriter, r *http.Request) {
+	acct := s.optionalAccount(r)
+	nsFilter := r.URL.Query().Get("namespace")
+	labelFilter := r.URL.Query().Get("label")
+
+	// Resolve label filter to a set of project names.
+	var labelProjects map[string]bool
+	if labelFilter != "" {
+		key, value, _ := strings.Cut(labelFilter, ":")
+		names, err := s.db.ListProjectsByLabel(key, value)
+		if err != nil {
+			writeErr(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		labelProjects = make(map[string]bool, len(names))
+		for _, n := range names {
+			labelProjects[n] = true
+		}
+	}
+
 	list, err := s.db.ListProjects()
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	acct := s.optionalAccount(r)
 	out := make(map[string]any, len(list))
 	for _, p := range list {
 		if !s.canReadProject(acct, p.Name) {
 			continue
 		}
-		out[p.Name] = map[string]any{
+		if nsFilter != "" && !strings.HasPrefix(p.Name, nsFilter+"/") {
+			continue
+		}
+		if labelProjects != nil && !labelProjects[p.Name] {
+			continue
+		}
+		info := map[string]any{
 			"name":        p.Name,
 			"description": p.Description,
 			"state":       p.State,
 			"parent":      p.Parent,
+			"namespace":   store.ProjectNamespace(p.Name),
 		}
+		if labels, err := s.db.GetProjectLabels(p.Name); err == nil && len(labels) > 0 {
+			info["labels"] = labels
+		}
+		out[p.Name] = info
 	}
 	writeJSON(w, http.StatusOK, out)
+}
+
+// handleListNamespaces returns the namespace tree derived from project names.
+func (s *Server) handleListNamespaces(w http.ResponseWriter, r *http.Request) {
+	acct := s.optionalAccount(r)
+	list, err := s.db.ListProjects()
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	var visible []string
+	for _, p := range list {
+		if s.canReadProject(acct, p.Name) {
+			visible = append(visible, p.Name)
+		}
+	}
+	tree := store.BuildNamespaceTree(visible)
+	writeJSON(w, http.StatusOK, tree)
+}
+
+// handleListLabels returns all distinct label keys and values.
+func (s *Server) handleListLabels(w http.ResponseWriter, r *http.Request) {
+	labels, err := s.db.ListAllLabels()
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, labels)
+}
+
+// handleGetProjectLabels returns labels for a single project.
+func (s *Server) handleGetProjectLabels(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	labels, err := s.db.GetProjectLabels(name)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, labels)
+}
+
+// handleSetProjectLabels sets or deletes labels on a project.
+// Requires admin or project owner permission.
+func (s *Server) handleSetProjectLabels(w http.ResponseWriter, r *http.Request) {
+	acct := s.account(r)
+	name := r.PathValue("name")
+	if _, err := s.db.GetProject(name); err != nil {
+		writeErr(w, http.StatusNotFound, "project not found")
+		return
+	}
+	if !s.canEditAccess(acct, name) {
+		s.forbid(w, r, PermEditAccess)
+		return
+	}
+	var req map[string]*string
+	if err := decodeJSON(r, &req); err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	for label, value := range req {
+		if value == nil {
+			if err := s.db.DeleteProjectLabel(name, label); err != nil {
+				writeErr(w, http.StatusInternalServerError, err.Error())
+				return
+			}
+		} else {
+			if err := s.db.SetProjectLabel(name, label, *value); err != nil {
+				writeErr(w, http.StatusInternalServerError, err.Error())
+				return
+			}
+		}
+	}
+	labels, _ := s.db.GetProjectLabels(name)
+	writeJSON(w, http.StatusOK, labels)
 }
 
 func (s *Server) handleCreateProject(w http.ResponseWriter, r *http.Request) {

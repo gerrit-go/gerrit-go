@@ -167,6 +167,17 @@ export interface CommentDraftInfo {
 export interface ProjectInfo {
   name: string;
   description?: string;
+  state?: string;
+  parent?: string;
+  namespace?: string;
+  labels?: Record<string, string>;
+}
+
+export interface NamespaceNode {
+  name: string;
+  path: string;
+  count: number;
+  children?: NamespaceNode[];
 }
 
 export const SUBMIT_TYPES = [
@@ -350,7 +361,22 @@ export const api = {
   logout: () => request<null>("/logout", { method: "POST" }),
   self: () => request<AccountInfo>("/accounts/self"),
 
-  listProjects: () => request<Record<string, ProjectInfo>>("/projects/"),
+  listProjects: (params?: { namespace?: string; label?: string }) => {
+    const qs = new URLSearchParams();
+    if (params?.namespace) qs.set("namespace", params.namespace);
+    if (params?.label) qs.set("label", params.label);
+    const q = qs.toString();
+    return request<Record<string, ProjectInfo>>(`/projects/${q ? "?" + q : ""}`);
+  },
+  listNamespaces: () => request<NamespaceNode[]>("/namespaces/"),
+  listLabels: () => request<Record<string, string[]>>("/labels/"),
+  getProjectLabels: (project: string) =>
+    request<Record<string, string>>(`/projects/${encodeURIComponent(project)}/labels`),
+  setProjectLabels: (project: string, labels: Record<string, string | null>) =>
+    request<Record<string, string>>(`/projects/${encodeURIComponent(project)}/labels`, {
+      method: "PUT",
+      body: JSON.stringify(labels),
+    }),
   createProject: (name: string, description: string, copyFrom?: string) =>
     request<ProjectInfo>("/projects/", {
       method: "POST",

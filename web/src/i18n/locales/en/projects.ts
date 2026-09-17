@@ -6,4 +6,7 @@ export default {
   copyFromPlaceholder: "existing/project — copies ACL, submit config, parent",
   empty: "No projects yet. Create one to get started.",
   noDescription: "No description",
+  namespaces: "Namespaces",
+  labels: "Labels",
+  allProjects: "All projects",
 };
