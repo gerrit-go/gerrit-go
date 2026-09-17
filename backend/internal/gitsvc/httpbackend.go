@@ -3,6 +3,7 @@ package gitsvc
 import (
 	"bufio"
 	"bytes"
+	"compress/gzip"
 	"fmt"
 	"io"
 	"net/http"
@@ -35,6 +36,15 @@ func (b *GitHTTPBackend) ServeHTTP(w http.ResponseWriter, r *http.Request, proje
 	var bodyFile *os.File
 	contentLength := 0
 	if r.Body != nil && (r.Method == http.MethodPost) {
+		body := r.Body
+		if strings.EqualFold(r.Header.Get("Content-Encoding"), "gzip") {
+			gz, err := gzip.NewReader(body)
+			if err != nil {
+				return fmt.Errorf("decompress request body: %w", err)
+			}
+			defer gz.Close()
+			body = gz
+		}
 		f, err := os.CreateTemp("", "gerrit-go-body-*")
 		if err != nil {
 			return err
@@ -43,7 +53,7 @@ func (b *GitHTTPBackend) ServeHTTP(w http.ResponseWriter, r *http.Request, proje
 			f.Close()
 			os.Remove(f.Name())
 		}()
-		n, err := io.Copy(f, io.LimitReader(r.Body, 2<<30))
+		n, err := io.Copy(f, io.LimitReader(body, 2<<30))
 		if err != nil {
 			return err
 		}
