@@ -32,6 +32,8 @@ export default {
     editFile: "编辑文件",
     publishEdit: "发布编辑",
     deleteEdit: "删除编辑",
+    rebaseEdit: "变基编辑",
+    editRebased: "编辑已变基到最新补丁集",
     editPublished: "编辑已发布为新补丁集",
     editDeleted: "编辑已丢弃",
     editStale: "此编辑基于旧补丁集，请删除后重新开始。",

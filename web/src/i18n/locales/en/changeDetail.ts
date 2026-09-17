@@ -32,6 +32,8 @@ export default {
     editFile: "Edit file",
     publishEdit: "Publish edit",
     deleteEdit: "Delete edit",
+    rebaseEdit: "Rebase edit",
+    editRebased: "Edit rebased onto the latest patch set",
     editPublished: "Edit published as a new patch set",
     editDeleted: "Edit discarded",
     editStale: "This edit is based on an older patch set; delete it and start over.",

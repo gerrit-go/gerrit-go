@@ -40,14 +40,20 @@ func (s *Server) editContext(w http.ResponseWriter, r *http.Request) (*store.Cha
 	return c, acct, true
 }
 
-// editInfoJSON renders an EditInfo, adding a stale flag when the edit's base
-// patch set is no longer the change's current one.
-func editInfoJSON(info *gitsvc.EditInfo, c *store.Change, currentSHA string) map[string]any {
+// editInfoJSON renders an EditInfo, adding a stale flag computed with the same
+// logic PublishEdit uses (so it is correct even for the root-commit edge case).
+func (s *Server) editInfoJSON(info *gitsvc.EditInfo, c *store.Change) map[string]any {
+	stale := false
+	if psSHA := s.currentPSCommit(c); psSHA != "" {
+		if st, err := s.git.IsEditStale(c.Project, info.SHA, psSHA); err == nil {
+			stale = st
+		}
+	}
 	return map[string]any{
 		"commit":      info.SHA,
 		"base_commit": info.BaseSHA,
 		"base_ps":     info.BasePS,
-		"stale":       info.BaseSHA != "" && info.BaseSHA != currentSHA,
+		"stale":       stale,
 	}
 }
 
@@ -68,7 +74,7 @@ func (s *Server) handleGetEdit(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, "no open edit")
 		return
 	}
-	writeJSON(w, http.StatusOK, editInfoJSON(info, c, s.currentPSCommit(c)))
+	writeJSON(w, http.StatusOK, s.editInfoJSON(info, c))
 }
 
 func (s *Server) handleCreateEdit(w http.ResponseWriter, r *http.Request) {
@@ -85,7 +91,7 @@ func (s *Server) handleCreateEdit(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, mapGitErr(err), err.Error())
 		return
 	}
-	writeJSON(w, http.StatusCreated, editInfoJSON(info, c, s.currentPSCommit(c)))
+	writeJSON(w, http.StatusCreated, s.editInfoJSON(info, c))
 }
 
 func (s *Server) handleDeleteEdit(w http.ResponseWriter, r *http.Request) {
@@ -126,7 +132,7 @@ func (s *Server) handlePutEditFile(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, mapGitErr(err), err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, editInfoJSON(info, c, s.currentPSCommit(c)))
+	writeJSON(w, http.StatusOK, s.editInfoJSON(info, c))
 }
 
 func (s *Server) handleDeleteEditFile(w http.ResponseWriter, r *http.Request) {
@@ -144,7 +150,24 @@ func (s *Server) handleDeleteEditFile(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, mapGitErr(err), err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, editInfoJSON(info, c, s.currentPSCommit(c)))
+	writeJSON(w, http.StatusOK, s.editInfoJSON(info, c))
+}
+
+func (s *Server) handleRebaseEdit(w http.ResponseWriter, r *http.Request) {
+	c, _, ok := s.editContext(w, r)
+	if !ok {
+		return
+	}
+	info, err := s.git.RebaseEdit(c.Project, c.Number)
+	if err != nil {
+		if errors.Is(err, gitsvc.ErrRefMissing) {
+			writeErr(w, http.StatusConflict, "no open edit")
+			return
+		}
+		writeErr(w, http.StatusConflict, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, s.editInfoJSON(info, c))
 }
 
 func (s *Server) handlePublishEdit(w http.ResponseWriter, r *http.Request) {

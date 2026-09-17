@@ -176,6 +176,7 @@ func (s *Server) routes() {
 	mux.HandleFunc("PUT /changes/{num}/edit/file", s.requireAuth(s.handlePutEditFile))
 	mux.HandleFunc("DELETE /changes/{num}/edit/file", s.requireAuth(s.handleDeleteEditFile))
 	mux.HandleFunc("POST /changes/{num}/edit:publish", s.requireAuth(s.handlePublishEdit))
+	mux.HandleFunc("POST /changes/{num}/edit:rebase", s.requireAuth(s.handleRebaseEdit))
 	mux.HandleFunc("POST /changes/{num}/cherry_pick", s.requireAuth(s.handleCherryPick))
 	mux.HandleFunc("POST /changes/{num}/revert", s.requireAuth(s.handleRevert))
 	mux.HandleFunc("POST /changes/{num}/abandon", s.requireAuth(s.handleAbandon))

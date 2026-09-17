@@ -574,6 +574,8 @@ export const api = {
     request<EditInfo>(`/changes/${num}/edit/file?path=${encodeURIComponent(path)}`, { method: "DELETE" }),
   publishEdit: (num: number | string) =>
     request<ChangeInfo>(`/changes/${num}/edit:publish`, { method: "POST" }),
+  rebaseEdit: (num: number | string) =>
+    request<EditInfo>(`/changes/${num}/edit:rebase`, { method: "POST" }),
   cherryPick: (num: number | string, destination: string) =>
     request<ChangeInfo>(`/changes/${num}/cherry_pick`, {
       method: "POST",

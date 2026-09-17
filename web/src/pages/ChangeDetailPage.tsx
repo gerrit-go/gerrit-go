@@ -433,6 +433,24 @@ export default function ChangeDetailPage() {
                       <Send className="size-4" />
                       {t("actions.publishEdit")}
                     </DropdownMenuItem>
+                    {edit.stale && (
+                      <DropdownMenuItem
+                        onSelect={async () => {
+                          setActionMsg("");
+                          setError("");
+                          try {
+                            const ed = await api.rebaseEdit(change._number);
+                            setEdit(ed);
+                            setActionMsg(t("actions.editRebased"));
+                          } catch (err) {
+                            setError((err as Error).message);
+                          }
+                        }}
+                      >
+                        <GitBranch className="size-4" />
+                        {t("actions.rebaseEdit")}
+                      </DropdownMenuItem>
+                    )}
                     <DropdownMenuItem
                       onSelect={async () => {
                         setActionMsg("");

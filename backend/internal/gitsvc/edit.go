@@ -154,8 +154,29 @@ func (s *Service) applyEditOp(project string, changeNumber int64, authorName, au
 		return s.editInfoFromSHA(project, changeNumber, editSHA)
 	}
 	author := fmt.Sprintf("%s <%s>", authorName, authorEmail)
-	if _, err := s.runGit(work, "commit", "--quiet", "--amend", "--no-edit", "--author="+author); err != nil {
-		return nil, err
+	// When the edit has not yet diverged from its base patch set (editSHA is
+	// still a patch-set commit), create a new commit on top of it so the edit
+	// commit's parent is the base patch set; this lets a later rebase replay
+	// only the edit's own changes. Once diverged, amend the edit commit.
+	diverged := true
+	if pss, err := s.db.ListPatchSets(changeNumber); err == nil {
+		for _, ps := range pss {
+			if ps.CommitSHA == editSHA {
+				diverged = false
+				break
+			}
+		}
+	}
+	if diverged {
+		if _, err := s.runGit(work, "commit", "--quiet", "--amend", "--no-edit", "--author="+author); err != nil {
+			return nil, err
+		}
+	} else {
+		// Reuse the base patch set's message (preserving the Change-Id); a fresh
+		// commit has no prior message for --no-edit to reuse.
+		if _, err := s.runGit(work, "commit", "--quiet", "--reuse-message="+editSHA, "--author="+author); err != nil {
+			return nil, err
+		}
 	}
 	newSHA, err := s.runGit(work, "rev-parse", "HEAD")
 	if err != nil {
@@ -248,21 +269,14 @@ func (s *Service) PublishEdit(project string, changeNumber int64) (NewCommit, er
 	if editSHA == ps.CommitSHA {
 		return NewCommit{}, ErrNoChanges
 	}
-	// The edit commit's parent must be the current patch set; otherwise the
-	// edit is stale (a newer patch set was uploaded after the edit started).
-	// Edge case: when the current patch set is a root commit (an empty repo's
-	// first change), amending it yields another root commit with no parent, so
-	// the parent lookup fails; treat a root edit as based on a root patch set.
-	dir := s.RepoDir(project)
-	baseSHA, baseErr := s.runGit(dir, "rev-parse", "--verify", editSHA+"^")
-	if baseErr != nil {
-		// Edit is a root commit: only valid when the current patch set is too.
-		if _, psErr := s.runGit(dir, "rev-parse", "--verify", ps.CommitSHA+"^"); psErr == nil {
-			return NewCommit{}, ErrEditStale
-		}
-	} else if baseSHA != ps.CommitSHA {
+	stale, err := s.IsEditStale(project, editSHA, ps.CommitSHA)
+	if err != nil {
+		return NewCommit{}, err
+	}
+	if stale {
 		return NewCommit{}, ErrEditStale
 	}
+	dir := s.RepoDir(project)
 	nc, err := s.readCommit(dir, editSHA)
 	if err != nil {
 		return NewCommit{}, err
@@ -276,4 +290,93 @@ func (s *Service) PublishEdit(project string, changeNumber int64) (NewCommit, er
 	}
 	nc.NewPatchSet = newPS
 	return nc, nil
+}
+
+// IsEditStale reports whether the edit commit editSHA is based on a patch set
+// other than psCommitSHA (the change's current patch set). An unmodified edit
+// points at its base patch set directly; an amended edit's first parent is its
+// base. Edge case: when the current patch set is a root commit (an empty
+// repo's first change), amending yields another root commit with no parent, so
+// a root edit is treated as based on a root patch set.
+func (s *Service) IsEditStale(project, editSHA, psCommitSHA string) (bool, error) {
+	if editSHA == psCommitSHA {
+		return false, nil
+	}
+	dir := s.RepoDir(project)
+	baseSHA, baseErr := s.runGit(dir, "rev-parse", "--verify", editSHA+"^")
+	if baseErr != nil {
+		// Edit is a root commit: stale only when the current patch set is not.
+		_, psErr := s.runGit(dir, "rev-parse", "--verify", psCommitSHA+"^")
+		return psErr == nil, nil
+	}
+	return baseSHA != psCommitSHA, nil
+}
+
+// RebaseEdit rebases the open edit commit onto the change's current patch set,
+// so an edit that went stale (a newer patch set was uploaded after it started)
+// can be brought up to date instead of deleted and recreated. It returns the
+// refreshed edit. A rebase conflict is reported as an error; the user can then
+// delete the edit and start over.
+func (s *Service) RebaseEdit(project string, changeNumber int64) (*EditInfo, error) {
+	m := s.lockEdit(changeNumber)
+	defer m.Unlock()
+
+	if !s.ProjectExists(project) {
+		return nil, ErrProjectMissing
+	}
+	c, err := s.db.GetChange(changeNumber)
+	if err != nil {
+		return nil, err
+	}
+	if c.Status != "NEW" {
+		return nil, ErrNotSubmittable
+	}
+	ps, err := s.db.GetPatchSet(changeNumber, c.CurrentPS)
+	if err != nil {
+		return nil, err
+	}
+	ref := s.editRef(changeNumber)
+	editSHA, err := s.runGit(s.RepoDir(project), "rev-parse", "--verify", ref+"^{commit}")
+	if err != nil {
+		return nil, ErrRefMissing
+	}
+	// Already based on the current patch set: nothing to do.
+	if editSHA == ps.CommitSHA {
+		return s.editInfoFromSHA(project, changeNumber, editSHA)
+	}
+	// The edit commit's parent is the patch set it was started from. Rebase
+	// --onto replays only the edit's own changes (parent..edit) onto the current
+	// patch set, so the base patch set's own changes are not reapplied.
+	baseSHA, err := s.runGit(s.RepoDir(project), "rev-parse", "--verify", editSHA+"^")
+	if err != nil {
+		return nil, errors.New("cannot determine the edit's base commit")
+	}
+
+	work, cleanup, err := s.cloneWork(project)
+	if err != nil {
+		return nil, err
+	}
+	defer cleanup()
+	if _, err := s.runGit(work, "fetch", "--quiet", "origin", ref); err != nil {
+		return nil, err
+	}
+	if _, err := s.runGit(work, "fetch", "--quiet", "origin", s.changeRef(changeNumber, c.CurrentPS)); err != nil {
+		return nil, err
+	}
+	if _, err := s.runGit(work, "checkout", "--quiet", "--detach", editSHA); err != nil {
+		return nil, err
+	}
+	if _, err := s.runGit(work, "rebase", "--onto", ps.CommitSHA, baseSHA); err != nil {
+		// Abort the failed rebase so the work tree is clean, then report it.
+		_, _ = s.runGit(work, "rebase", "--abort")
+		return nil, errors.New("edit rebase conflict; delete the edit and start over")
+	}
+	newSHA, err := s.runGit(work, "rev-parse", "HEAD")
+	if err != nil {
+		return nil, err
+	}
+	if _, err := s.runGit(work, "push", "--quiet", "--force", "origin", newSHA+":"+ref); err != nil {
+		return nil, err
+	}
+	return s.editInfoFromSHA(project, changeNumber, newSHA)
 }
