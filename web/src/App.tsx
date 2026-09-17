@@ -40,7 +40,7 @@ function ThemeToggle() {
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <Button variant="ghost" size="icon" aria-label={t("theme.select")}>
+        <Button variant="ghost" size="icon" aria-label={t("theme.select")} className="hidden md:inline-flex">
           <CurrentIcon className="size-4" />
         </Button>
       </DropdownMenuTrigger>
@@ -62,7 +62,7 @@ function LanguageSwitcher() {
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <Button variant="ghost" size="icon" aria-label={t("lang.select")}>
+        <Button variant="ghost" size="icon" aria-label={t("lang.select")} className="hidden md:inline-flex">
           <Languages className="size-4" />
         </Button>
       </DropdownMenuTrigger>
@@ -80,13 +80,19 @@ function LanguageSwitcher() {
 
 function MobileNav() {
   const { user } = useAuth();
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const navigate = useNavigate();
+  const { theme, setTheme } = useTheme();
   const links: { to: string; label: string; icon: typeof Sun }[] = [
     ...(user ? [{ to: "/dashboard", label: t("nav.dashboard"), icon: LayoutDashboard }] : []),
     { to: "/", label: t("nav.changes"), icon: GitPullRequestArrow },
     { to: "/projects", label: t("nav.projects"), icon: FolderGit2 },
     ...(user ? [{ to: "/groups", label: t("nav.groups"), icon: Users }] : []),
+  ];
+  const themeOptions: { value: Theme; label: string; icon: typeof Sun }[] = [
+    { value: "light", label: t("theme.light"), icon: Sun },
+    { value: "dark", label: t("theme.dark"), icon: Moon },
+    { value: "system", label: t("theme.system"), icon: Monitor },
   ];
   return (
     <DropdownMenu>
@@ -100,6 +106,23 @@ function MobileNav() {
           <DropdownMenuItem key={l.to} onClick={() => navigate(l.to)}>
             <l.icon className="size-4" />
             {l.label}
+          </DropdownMenuItem>
+        ))}
+        <DropdownMenuSeparator />
+        <DropdownMenuLabel className="text-xs text-muted-foreground">{t("theme.select")}</DropdownMenuLabel>
+        {themeOptions.map((o) => (
+          <DropdownMenuItem key={o.value} onClick={() => setTheme(o.value)}>
+            <o.icon className="size-4" />
+            {o.label}
+            {theme === o.value && <Check className="ml-auto size-4" />}
+          </DropdownMenuItem>
+        ))}
+        <DropdownMenuSeparator />
+        <DropdownMenuLabel className="text-xs text-muted-foreground">{t("lang.select")}</DropdownMenuLabel>
+        {LANGUAGES.map((l) => (
+          <DropdownMenuItem key={l.code} onClick={() => void i18n.changeLanguage(l.code)}>
+            <span className="text-sm">{l.label}</span>
+            {i18n.language === l.code && <Check className="ml-auto size-4" />}
           </DropdownMenuItem>
         ))}
       </DropdownMenuContent>

@@ -2142,7 +2142,7 @@ function DiffView({
 
   if (mode === "split") {
     return (
-      <div className="border-t bg-card font-mono text-xs leading-5">
+      <div className="overflow-x-auto border-t bg-card font-mono text-xs leading-5">
         {file.hunks.map((hunk, hi) => (
           <div key={hi}>
             <div className="bg-blue-50 px-4 py-0.5 text-[11px] text-blue-700 dark:bg-blue-950/40 dark:text-blue-300">
