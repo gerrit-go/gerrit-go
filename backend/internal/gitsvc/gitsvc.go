@@ -232,6 +232,17 @@ func (s *Service) upsertChange(repo *git.Repository, project, branch string, c *
 	if err := s.db.SetCurrentPatchSet(change.Number, num); err != nil {
 		return err
 	}
+	// Record the touched file paths for the file: query operator. Non-fatal.
+	if commit, err := repo.CommitObject(c.Hash); err == nil {
+		if patch, err := patchAgainstParent(commit); err == nil {
+			diffs := patchToFileDiffs(patch)
+			paths := make([]string, 0, len(diffs))
+			for _, fd := range diffs {
+				paths = append(paths, fd.Path)
+			}
+			_ = s.db.AddPatchSetFiles(change.Number, num, paths)
+		}
+	}
 	s.db.AddChangeMessage(&store.ChangeMessage{
 		ChangeNum: change.Number, PatchSet: num, Type: "patchset-uploaded",
 		AuthorID: pusher.ID, Message: fmt.Sprintf("Uploaded patch set %d.", num),

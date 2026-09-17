@@ -13,4 +13,11 @@ export default {
   range: "第 {{from}}–{{to}} 条，共 {{total}} 条",
   prev: "上一页",
   next: "下一页",
+  savedQueries: {
+    empty: "暂无已存查询",
+    save: "保存查询",
+    saveTitle: "保存当前查询",
+    namePlaceholder: "查询名称",
+    share: "分享给所有人",
+  },
 };

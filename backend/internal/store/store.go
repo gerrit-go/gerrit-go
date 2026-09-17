@@ -210,6 +210,14 @@ CREATE TABLE IF NOT EXISTS patchsets (
   created TEXT NOT NULL,
   PRIMARY KEY (change_number, number)
 );
+CREATE TABLE IF NOT EXISTS patchset_files (
+  change_number INTEGER NOT NULL REFERENCES changes(number) ON DELETE CASCADE,
+  patch_set INTEGER NOT NULL,
+  file_path TEXT NOT NULL,
+  PRIMARY KEY (change_number, patch_set, file_path)
+);
+CREATE INDEX IF NOT EXISTS idx_psfiles_path ON patchset_files(file_path);
+CREATE INDEX IF NOT EXISTS idx_psfiles_change ON patchset_files(change_number);
 CREATE TABLE IF NOT EXISTS votes (
   change_number INTEGER NOT NULL REFERENCES changes(number) ON DELETE CASCADE,
   patch_set INTEGER NOT NULL,
@@ -291,6 +299,14 @@ CREATE TABLE IF NOT EXISTS starred (
   change_number INTEGER NOT NULL REFERENCES changes(number) ON DELETE CASCADE,
   added TEXT NOT NULL,
   PRIMARY KEY (account_id, change_number)
+);
+CREATE TABLE IF NOT EXISTS saved_queries (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  account_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  query TEXT NOT NULL,
+  shared INTEGER NOT NULL DEFAULT 0,
+  created TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS submit_requirements (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -978,6 +994,45 @@ func (d *DB) ListPatchSets(changeNumber int64) ([]*PatchSet, error) {
 			return nil, err
 		}
 		p.Created = parseTime(created)
+		out = append(out, p)
+	}
+	return out, rows.Err()
+}
+
+// AddPatchSetFiles records the file paths a patch set touches, replacing any
+// existing rows for that patch set.
+func (d *DB) AddPatchSetFiles(changeNumber int64, psNumber int, paths []string) error {
+	tx, err := d.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec(`DELETE FROM patchset_files WHERE change_number=? AND patch_set=?`, changeNumber, psNumber); err != nil {
+		return err
+	}
+	for _, p := range paths {
+		if _, err := tx.Exec(
+			`INSERT INTO patchset_files(change_number, patch_set, file_path) VALUES(?,?,?)
+			 ON CONFLICT(change_number, patch_set, file_path) DO NOTHING`, changeNumber, psNumber, p); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+// ListPatchSetFiles returns the file paths a patch set touches.
+func (d *DB) ListPatchSetFiles(changeNumber int64, psNumber int) ([]string, error) {
+	rows, err := d.db.Query(`SELECT file_path FROM patchset_files WHERE change_number=? AND patch_set=? ORDER BY file_path`, changeNumber, psNumber)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var p string
+		if err := rows.Scan(&p); err != nil {
+			return nil, err
+		}
 		out = append(out, p)
 	}
 	return out, rows.Err()

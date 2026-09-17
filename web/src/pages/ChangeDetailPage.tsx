@@ -75,6 +75,7 @@ import {
 import { cn, timeAgo } from "@/lib/utils";
 import { highlightLine, langForPath } from "@/lib/highlight";
 import { applySuggestionToLines, parseSuggestion } from "@/lib/suggestion";
+import { useHotkey } from "@/lib/hotkey";
 import { StatusBadge } from "@/pages/ChangesPage";
 
 export default function ChangeDetailPage() {
@@ -98,6 +99,22 @@ export default function ChangeDetailPage() {
   const [editFileContent, setEditFileContent] = useState("");
   const [downloadOpen, setDownloadOpen] = useState(false);
   const [sshPort, setSshPort] = useState("");
+  const [fileIdx, setFileIdx] = useState(-1);
+
+  useHotkey((e) => {
+    const count = files?.length ?? 0;
+    if (e.key === "]" && count > 0) {
+      const next = Math.min(fileIdx + 1, count - 1);
+      setFileIdx(next);
+      document.querySelector(`[data-file-idx="${next}"]`)?.scrollIntoView({ behavior: "smooth", block: "start" });
+    } else if (e.key === "[" && count > 0) {
+      const prev = Math.max(fileIdx - 1, 0);
+      setFileIdx(prev);
+      document.querySelector(`[data-file-idx="${prev}"]`)?.scrollIntoView({ behavior: "smooth", block: "start" });
+    } else if (e.key === "r") {
+      document.querySelector("[data-review-box]")?.scrollIntoView({ behavior: "smooth", block: "center" });
+    }
+  });
 
   useEffect(() => {
     api
@@ -566,8 +583,8 @@ export default function ChangeDetailPage() {
                 </div>
               ) : (
                 <div className="divide-y">
-                  {files.map((f) => (
-                    <div key={f.path + (f.old_path ?? "")}>
+                  {files.map((f, fi) => (
+                    <div key={f.path + (f.old_path ?? "")} data-file-idx={fi}>
                       <div className="flex items-center gap-2 px-4 py-1.5 text-sm">
                         <FileStatusIcon status={f.status} />
                         <span className="font-mono text-xs">{f.path}</span>
@@ -625,7 +642,7 @@ export default function ChangeDetailPage() {
           </Card>
 
           {/* unified change timeline */}
-          <Card className="gap-0 py-0">
+          <Card className="gap-0 py-0" data-review-box>
             <CardHeader className="border-b py-3">
               <CardTitle className="text-sm">{t("messages.title", { num: messages.length })}</CardTitle>
             </CardHeader>

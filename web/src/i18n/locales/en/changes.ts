@@ -13,4 +13,11 @@ export default {
   range: "{{from}}–{{to}} of {{total}}",
   prev: "Prev",
   next: "Next",
+  savedQueries: {
+    empty: "No saved queries",
+    save: "Save query",
+    saveTitle: "Save current query",
+    namePlaceholder: "Query name",
+    share: "Share with everyone",
+  },
 };

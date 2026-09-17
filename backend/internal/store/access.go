@@ -375,6 +375,64 @@ func (d *DB) ListStarred(accountID int64) ([]int64, error) {
 	return out, rows.Err()
 }
 
+// ---------- saved queries ----------
+
+// SavedQuery is a named change-list query owned by an account, optionally
+// shared with everyone.
+type SavedQuery struct {
+	ID        int64     `json:"id"`
+	AccountID int64     `json:"-"`
+	Name      string    `json:"name"`
+	Query     string    `json:"query"`
+	Shared    bool      `json:"shared"`
+	Owner     string    `json:"owner,omitempty"`
+	Created   time.Time `json:"-"`
+}
+
+// CreateSavedQuery stores a named query for an account.
+func (d *DB) CreateSavedQuery(accountID int64, name, query string, shared bool) (*SavedQuery, error) {
+	id, err := d.insertID(
+		`INSERT INTO saved_queries(account_id, name, query, shared, created) VALUES(?,?,?,?,?)`,
+		"id", accountID, name, query, b2i(shared), now())
+	if err != nil {
+		return nil, err
+	}
+	return &SavedQuery{ID: id, AccountID: accountID, Name: name, Query: query, Shared: shared}, nil
+}
+
+// ListSavedQueries returns the account's own saved queries plus any shared
+// queries from other accounts.
+func (d *DB) ListSavedQueries(accountID int64) ([]*SavedQuery, error) {
+	rows, err := d.db.Query(`
+		SELECT q.id, q.account_id, q.name, q.query, q.shared, q.created, a.username
+		FROM saved_queries q JOIN accounts a ON a.id = q.account_id
+		WHERE q.account_id=? OR q.shared=1
+		ORDER BY q.shared, q.name`, accountID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []*SavedQuery
+	for rows.Next() {
+		q := &SavedQuery{}
+		var shared int
+		var created string
+		if err := rows.Scan(&q.ID, &q.AccountID, &q.Name, &q.Query, &shared, &created, &q.Owner); err != nil {
+			return nil, err
+		}
+		q.Shared = shared == 1
+		q.Created = parseTime(created)
+		out = append(out, q)
+	}
+	return out, rows.Err()
+}
+
+// DeleteSavedQuery removes a saved query owned by the account.
+func (d *DB) DeleteSavedQuery(accountID, id int64) error {
+	_, err := d.db.Exec(`DELETE FROM saved_queries WHERE id=? AND account_id=?`, id, accountID)
+	return err
+}
+
 // ---------- watched projects ----------
 
 // WatchProject records that accountID watches project. notify controls the email

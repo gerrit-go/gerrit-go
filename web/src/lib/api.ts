@@ -290,6 +290,14 @@ export interface WatchedProjectInfo {
   notify: string;
 }
 
+export interface SavedQuery {
+  id: number;
+  name: string;
+  query: string;
+  shared: boolean;
+  owner?: string;
+}
+
 class ApiError extends Error {
   status: number;
   totpRequired?: boolean;
@@ -650,6 +658,14 @@ export const api = {
       { method: "DELETE" },
     ),
   listWatched: () => request<WatchedProjectInfo[]>("/accounts/self/watched"),
+  listSavedQueries: () => request<SavedQuery[]>("/accounts/self/queries"),
+  createSavedQuery: (name: string, query: string, shared: boolean) =>
+    request<SavedQuery>("/accounts/self/queries", {
+      method: "POST",
+      body: JSON.stringify({ name, query, shared }),
+    }),
+  deleteSavedQuery: (id: number) =>
+    request<null>(`/accounts/self/queries/${id}`, { method: "DELETE" }),
 
   listNotifications: (n = 50, unreadOnly = false) =>
     request<NotificationList>(

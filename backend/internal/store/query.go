@@ -392,14 +392,38 @@ func condFor(term string, self *Account) QueryNode {
 		}
 		u := resolve(val)
 		return leaf(`EXISTS (SELECT 1 FROM accounts aa WHERE aa.id=ch.assignee_id AND (aa.username=? OR aa.full_name=?))`, u, u)
+	case "subject":
+		like := "%" + escapeLike(strings.ToLower(val)) + "%"
+		return leaf(`LOWER(ch.subject) LIKE ? ESCAPE '\'`, like)
+	case "message":
+		like := "%" + escapeLike(strings.ToLower(val)) + "%"
+		return leaf(`(LOWER(ch.subject) LIKE ? ESCAPE '\' OR EXISTS (
+			SELECT 1 FROM patchsets ps WHERE ps.change_number=ch.number AND LOWER(ps.message) LIKE ? ESCAPE '\'))`, like, like)
+	case "comment":
+		like := "%" + escapeLike(strings.ToLower(val)) + "%"
+		return leaf(`(EXISTS (
+			SELECT 1 FROM comments cm WHERE cm.change_number=ch.number AND LOWER(cm.message) LIKE ? ESCAPE '\'
+		) OR EXISTS (
+			SELECT 1 FROM change_messages msg WHERE msg.change_number=ch.number AND LOWER(msg.message) LIKE ? ESCAPE '\'
+		))`, like, like)
+	case "file":
+		like := "%" + escapeLike(strings.ToLower(val)) + "%"
+		return leaf(`EXISTS (
+			SELECT 1 FROM patchset_files pf WHERE pf.change_number=ch.number AND LOWER(pf.file_path) LIKE ? ESCAPE '\')`, like)
 	default:
 		return condText(term)
 	}
 }
 
+// escapeLike escapes %, _, and \ for use in a LIKE ... ESCAPE '\' pattern.
+func escapeLike(s string) string {
+	r := strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`)
+	return r.Replace(s)
+}
+
 func condText(t string) QueryNode {
-	like := "%" + t + "%"
-	return leaf(`(ch.subject LIKE ? OR ch.project LIKE ? OR ch.change_id LIKE ? OR CAST(ch.number AS TEXT) LIKE ?)`,
+	like := "%" + escapeLike(strings.ToLower(t)) + "%"
+	return leaf(`(LOWER(ch.subject) LIKE ? ESCAPE '\' OR LOWER(ch.project) LIKE ? ESCAPE '\' OR LOWER(ch.change_id) LIKE ? ESCAPE '\' OR CAST(ch.number AS TEXT) LIKE ? ESCAPE '\')`,
 		like, like, like, like)
 }
 

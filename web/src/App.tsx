@@ -25,6 +25,8 @@ import ProjectDetailPage from "@/pages/ProjectDetailPage";
 import GroupsPage from "@/pages/GroupsPage";
 import LoginPage from "@/pages/LoginPage";
 import NotificationBell from "@/components/NotificationBell";
+import ShortcutsHelp from "@/components/ShortcutsHelp";
+import { useHotkey } from "@/lib/hotkey";
 
 function ThemeToggle() {
   const { theme, setTheme } = useTheme();
@@ -261,6 +263,33 @@ function Header() {
 }
 
 export default function App() {
+  const navigate = useNavigate();
+  const [helpOpen, setHelpOpen] = useState(false);
+  const [pending, setPending] = useState("");
+
+  useHotkey((e) => {
+    if (e.key === "?") {
+      setHelpOpen((v) => !v);
+      return;
+    }
+    if (e.key === "u") {
+      navigate(-1);
+      return;
+    }
+    // Two-key "g X" navigation sequences.
+    if (pending === "g") {
+      setPending("");
+      if (e.key === "c") navigate("/");
+      else if (e.key === "d") navigate("/dashboard");
+      else if (e.key === "p") navigate("/projects");
+      return;
+    }
+    if (e.key === "g") {
+      setPending("g");
+      setTimeout(() => setPending(""), 800);
+    }
+  });
+
   return (
     <div className="min-h-screen bg-background">
       <Header />
@@ -277,6 +306,7 @@ export default function App() {
           <Route path="*" element={<NotFound />} />
         </Routes>
       </main>
+      <ShortcutsHelp open={helpOpen} onOpenChange={setHelpOpen} />
     </div>
   );
 }

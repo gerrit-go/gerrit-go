@@ -1,12 +1,26 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
-import { Star } from "lucide-react";
-import { api, type ChangeInfo, type LabelInfo } from "@/lib/api";
+import { Bookmark, BookmarkPlus, Star, Trash2 } from "lucide-react";
+import { api, type ChangeInfo, type LabelInfo, type SavedQuery } from "@/lib/api";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Skeleton } from "@/components/ui/skeleton";
+import {
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { cn, timeAgo } from "@/lib/utils";
 import { useAuth } from "@/auth";
 import {
@@ -82,6 +96,19 @@ export default function ChangesPage() {
   const [changes, setChanges] = useState<ChangeInfo[] | null>(null);
   const [total, setTotal] = useState(0);
   const [error, setError] = useState("");
+  const [savedQueries, setSavedQueries] = useState<SavedQuery[]>([]);
+  const [saveOpen, setSaveOpen] = useState(false);
+
+  useEffect(() => {
+    if (!user) {
+      setSavedQueries([]);
+      return;
+    }
+    api
+      .listSavedQueries()
+      .then((s) => setSavedQueries(s ?? []))
+      .catch(() => setSavedQueries([]));
+  }, [user]);
 
   const statusFilter = useMemo(() => {
     const m = q.match(/status:(open|merged|abandoned)/);
@@ -136,6 +163,21 @@ export default function ChangesPage() {
     setSearchParams(next);
   };
 
+  const applySavedQuery = (sq: SavedQuery) => {
+    const next = new URLSearchParams();
+    next.set("q", sq.query);
+    setSearchParams(next);
+  };
+
+  const removeSavedQuery = async (id: number) => {
+    try {
+      await api.deleteSavedQuery(id);
+      setSavedQueries((s) => s.filter((x) => x.id !== id));
+    } catch {
+      /* ignore */
+    }
+  };
+
   const onSearch = (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     const input = new FormData(e.currentTarget).get("q") as string;
@@ -163,7 +205,50 @@ export default function ChangesPage() {
 
       <form onSubmit={onSearch} className="flex gap-2">
         <SearchBar defaultValue={freeText} />
+        {user && (
+          <>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button type="button" size="sm" variant="outline">
+                  <Bookmark className="size-4" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-64">
+                {savedQueries.length === 0 ? (
+                  <div className="px-2 py-1.5 text-xs text-muted-foreground">{t("savedQueries.empty")}</div>
+                ) : (
+                  savedQueries.map((sq) => (
+                    <DropdownMenuItem key={sq.id} onSelect={() => applySavedQuery(sq)} className="flex items-center gap-2">
+                      <span className="min-w-0 flex-1 truncate">
+                        {sq.name}
+                        {sq.shared && sq.owner && <span className="text-muted-foreground"> · {sq.owner}</span>}
+                      </span>
+                      <button
+                        className="shrink-0 text-muted-foreground hover:text-destructive"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          removeSavedQuery(sq.id);
+                        }}
+                      >
+                        <Trash2 className="size-3.5" />
+                      </button>
+                    </DropdownMenuItem>
+                  ))
+                )}
+              </DropdownMenuContent>
+            </DropdownMenu>
+            <Button type="button" size="sm" variant="outline" onClick={() => setSaveOpen(true)} title={t("savedQueries.save")}>
+              <BookmarkPlus className="size-4" />
+            </Button>
+          </>
+        )}
       </form>
+      <SaveQueryDialog
+        open={saveOpen}
+        onOpenChange={setSaveOpen}
+        currentQuery={q}
+        onSaved={(sq) => setSavedQueries((s) => [...s, sq])}
+      />
 
       {error && <p className="text-sm text-destructive">{error}</p>}
 
@@ -291,5 +376,73 @@ function SearchBar({ defaultValue }: { defaultValue: string }) {
       placeholder={t("filterPlaceholder")}
       className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-xs transition-[color,box-shadow] outline-none placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
     />
+  );
+}
+
+function SaveQueryDialog({
+  open,
+  onOpenChange,
+  currentQuery,
+  onSaved,
+}: {
+  open: boolean;
+  onOpenChange: (v: boolean) => void;
+  currentQuery: string;
+  onSaved: (sq: SavedQuery) => void;
+}) {
+  const { t } = useTranslation("changes");
+  const [name, setName] = useState("");
+  const [shared, setShared] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+
+  useEffect(() => {
+    if (open) {
+      setName("");
+      setShared(false);
+      setErr("");
+    }
+  }, [open]);
+
+  const save = async () => {
+    if (!name.trim() || !currentQuery.trim()) return;
+    setBusy(true);
+    setErr("");
+    try {
+      const sq = await api.createSavedQuery(name.trim(), currentQuery, shared);
+      onSaved(sq);
+      onOpenChange(false);
+    } catch (e) {
+      setErr((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>{t("savedQueries.saveTitle")}</DialogTitle>
+        </DialogHeader>
+        <div className="flex flex-col gap-3">
+          <code className="rounded bg-muted/40 px-2 py-1 font-mono text-xs">{currentQuery}</code>
+          <Input value={name} onChange={(e) => setName(e.target.value)} placeholder={t("savedQueries.namePlaceholder")} />
+          <label className="flex items-center gap-2 text-sm">
+            <input type="checkbox" checked={shared} onChange={(e) => setShared(e.target.checked)} />
+            {t("savedQueries.share")}
+          </label>
+          {err && <p className="text-xs text-destructive">{err}</p>}
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={() => onOpenChange(false)} disabled={busy}>
+            {t("common:cancel")}
+          </Button>
+          <Button onClick={save} disabled={busy || !name.trim() || !currentQuery.trim()}>
+            {t("savedQueries.save")}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }

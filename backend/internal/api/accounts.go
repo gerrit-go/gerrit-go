@@ -153,6 +153,51 @@ func parsePublicKey(s string) (key, comment string) {
 	return key, comment
 }
 
+// ---------- saved queries ----------
+
+func (s *Server) handleListSavedQueries(w http.ResponseWriter, r *http.Request) {
+	acct := s.account(r)
+	list, err := s.db.ListSavedQueries(acct.ID)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, list)
+}
+
+func (s *Server) handleCreateSavedQuery(w http.ResponseWriter, r *http.Request) {
+	acct := s.account(r)
+	var req struct {
+		Name   string `json:"name"`
+		Query  string `json:"query"`
+		Shared bool   `json:"shared"`
+	}
+	if err := decodeJSON(r, &req); err != nil || strings.TrimSpace(req.Name) == "" || strings.TrimSpace(req.Query) == "" {
+		writeErr(w, http.StatusBadRequest, "name and query are required")
+		return
+	}
+	q, err := s.db.CreateSavedQuery(acct.ID, strings.TrimSpace(req.Name), strings.TrimSpace(req.Query), req.Shared)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusCreated, q)
+}
+
+func (s *Server) handleDeleteSavedQuery(w http.ResponseWriter, r *http.Request) {
+	acct := s.account(r)
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid id")
+		return
+	}
+	if err := s.db.DeleteSavedQuery(acct.ID, id); err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 // ---------- public config + OAuth ----------
 
 func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
