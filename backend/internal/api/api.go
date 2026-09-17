@@ -916,20 +916,54 @@ func (s *Server) handleListChanges(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("X-Total-Count", strconv.Itoa(total))
-	out := make([]map[string]any, 0, len(changes))
+
+	// Filter by read permission first so batch queries only fetch visible changes.
+	visible := make([]*store.Change, 0, len(changes))
 	for _, c := range changes {
-		if !s.canReadChange(acct, c) {
-			continue
+		if s.canReadChange(acct, c) {
+			visible = append(visible, c)
 		}
+	}
+	nums := make([]int64, len(visible))
+	for i, c := range visible {
+		nums[i] = c.Number
+	}
+
+	patchsets, err := s.db.GetCurrentPatchSetsBatch(visible)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	votesByChange, err := s.db.ListVotesBatch(nums)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	reviewersByChange, err := s.db.ListReviewersBatch(nums)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	var starred map[int64]bool
+	if acct != nil {
+		starred, err = s.db.ListStarredBatch(acct.ID, nums)
+		if err != nil {
+			writeErr(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+	}
+
+	out := make([]map[string]any, 0, len(visible))
+	for _, c := range visible {
 		info := changeInfo(c)
-		if ps, err := s.db.GetPatchSet(c.Number, c.CurrentPS); err == nil {
+		if ps, ok := patchsets[c.Number]; ok {
 			info["current_revision"] = ps.CommitSHA
 		}
 		info["current_ps"] = c.CurrentPS
-		info["labels"] = s.labelsFor(c.Number)
-		info["reviewers"] = s.reviewersFor(c.Number)
+		info["labels"] = labelsFromVotes(votesByChange[c.Number])
+		info["reviewers"] = reviewersFromList(reviewersByChange[c.Number])
 		if acct != nil {
-			info["starred"] = s.db.IsStarred(acct.ID, c.Number)
+			info["starred"] = starred[c.Number]
 		}
 		out = append(out, info)
 	}
@@ -942,6 +976,11 @@ func (s *Server) reviewersFor(changeNum int64) []map[string]any {
 	if err != nil {
 		return []map[string]any{}
 	}
+	return reviewersFromList(reviewers)
+}
+
+// reviewersFromList assembles ReviewerInfo maps from an already-fetched list.
+func reviewersFromList(reviewers []*store.Reviewer) []map[string]any {
 	out := make([]map[string]any, 0, len(reviewers))
 	for _, rv := range reviewers {
 		out = append(out, map[string]any{
@@ -959,6 +998,11 @@ func (s *Server) labelsFor(changeNum int64) map[string]map[string]any {
 	if err != nil {
 		return map[string]map[string]any{}
 	}
+	return labelsFromVotes(votes)
+}
+
+// labelsFromVotes assembles the labels map from an already-fetched vote list.
+func labelsFromVotes(votes []*store.VoteInfo) map[string]map[string]any {
 	labelInfo := map[string]map[string]any{}
 	for _, v := range votes {
 		l, ok := labelInfo[v.Label]

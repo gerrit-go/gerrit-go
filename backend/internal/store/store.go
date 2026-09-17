@@ -171,6 +171,7 @@ CREATE TABLE IF NOT EXISTS accounts (
   admin INTEGER NOT NULL DEFAULT 0,
   created TEXT NOT NULL
 );
+CREATE INDEX IF NOT EXISTS idx_accounts_email ON accounts(email);
 CREATE TABLE IF NOT EXISTS sessions (
   id TEXT PRIMARY KEY,
   account_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
@@ -201,6 +202,8 @@ CREATE TABLE IF NOT EXISTS changes (
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_changes_cid ON changes(project, branch, change_id);
 CREATE INDEX IF NOT EXISTS idx_changes_topic ON changes(topic);
+CREATE INDEX IF NOT EXISTS idx_changes_owner ON changes(owner_id, status, updated);
+CREATE INDEX IF NOT EXISTS idx_changes_proj_status ON changes(project, status, updated);
 CREATE TABLE IF NOT EXISTS patchsets (
   change_number INTEGER NOT NULL REFERENCES changes(number) ON DELETE CASCADE,
   number INTEGER NOT NULL,
@@ -241,6 +244,7 @@ CREATE TABLE IF NOT EXISTS comments (
   robot_run_id TEXT NOT NULL DEFAULT '',
   created TEXT NOT NULL
 );
+CREATE INDEX IF NOT EXISTS idx_comments_change_ps ON comments(change_number, patch_set);
 CREATE TABLE IF NOT EXISTS comment_drafts (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   change_number INTEGER NOT NULL REFERENCES changes(number) ON DELETE CASCADE,
@@ -1014,6 +1018,37 @@ func (d *DB) ListPatchSets(changeNumber int64) ([]*PatchSet, error) {
 	return out, rows.Err()
 }
 
+// GetCurrentPatchSetsBatch returns the current patch set for each change in one query.
+func (d *DB) GetCurrentPatchSetsBatch(changes []*Change) (map[int64]*PatchSet, error) {
+	out := map[int64]*PatchSet{}
+	if len(changes) == 0 {
+		return out, nil
+	}
+	ph := make([]string, len(changes))
+	args := make([]any, 0, len(changes)*2)
+	for i, c := range changes {
+		ph[i] = "(?,?)"
+		args = append(args, c.Number, c.CurrentPS)
+	}
+	rows, err := d.db.Query(`
+		SELECT change_number, number, commit_sha, author_name, author_email, message, created
+		FROM patchsets WHERE (change_number, number) IN (`+strings.Join(ph, ",")+`)`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		p := &PatchSet{}
+		var created string
+		if err := rows.Scan(&p.ChangeNumber, &p.Number, &p.CommitSHA, &p.AuthorName, &p.AuthorEmail, &p.Message, &created); err != nil {
+			return nil, err
+		}
+		p.Created = parseTime(created)
+		out[p.ChangeNumber] = p
+	}
+	return out, rows.Err()
+}
+
 // ListAllPatchSets returns every patch set across all changes, for the
 // patchset_files backfill.
 func (d *DB) ListAllPatchSets() ([]*PatchSet, error) {
@@ -1111,6 +1146,36 @@ func (d *DB) ListVotes(changeNumber int64) ([]*VoteInfo, error) {
 			return nil, err
 		}
 		out = append(out, v)
+	}
+	return out, rows.Err()
+}
+
+// ListVotesBatch returns votes for many changes in one query, grouped by change number.
+func (d *DB) ListVotesBatch(changeNumbers []int64) (map[int64][]*VoteInfo, error) {
+	out := map[int64][]*VoteInfo{}
+	if len(changeNumbers) == 0 {
+		return out, nil
+	}
+	ph := make([]string, len(changeNumbers))
+	args := make([]any, len(changeNumbers))
+	for i, n := range changeNumbers {
+		ph[i] = "?"
+		args[i] = n
+	}
+	rows, err := d.db.Query(`
+		SELECT v.change_number, v.patch_set, v.account_id, v.label, v.value, a.full_name, a.username
+		FROM votes v JOIN accounts a ON a.id = v.account_id
+		WHERE v.change_number IN (`+strings.Join(ph, ",")+`) ORDER BY v.change_number, v.patch_set`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		v := &VoteInfo{}
+		if err := rows.Scan(&v.ChangeNumber, &v.PatchSet, &v.AccountID, &v.Label, &v.Value, &v.AccountName, &v.AccountUser); err != nil {
+			return nil, err
+		}
+		out[v.ChangeNumber] = append(out[v.ChangeNumber], v)
 	}
 	return out, rows.Err()
 }
@@ -1343,6 +1408,41 @@ func (d *DB) ListReviewers(changeNumber int64) ([]*Reviewer, error) {
 			r.Name = r.Username
 		}
 		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+// ListReviewersBatch returns reviewers for many changes in one query, grouped by change number.
+func (d *DB) ListReviewersBatch(changeNumbers []int64) (map[int64][]*Reviewer, error) {
+	out := map[int64][]*Reviewer{}
+	if len(changeNumbers) == 0 {
+		return out, nil
+	}
+	ph := make([]string, len(changeNumbers))
+	args := make([]any, len(changeNumbers))
+	for i, n := range changeNumbers {
+		ph[i] = "?"
+		args[i] = n
+	}
+	rows, err := d.db.Query(`
+		SELECT rv.change_number, rv.account_id, a.full_name, a.username, a.email, rv.added
+		FROM reviewers rv JOIN accounts a ON a.id = rv.account_id
+		WHERE rv.change_number IN (`+strings.Join(ph, ",")+`) ORDER BY rv.change_number, rv.added`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		r := &Reviewer{}
+		var added string
+		if err := rows.Scan(&r.ChangeNumber, &r.AccountID, &r.Name, &r.Username, &r.Email, &added); err != nil {
+			return nil, err
+		}
+		r.Added = parseTime(added)
+		if r.Name == "" {
+			r.Name = r.Username
+		}
+		out[r.ChangeNumber] = append(out[r.ChangeNumber], r)
 	}
 	return out, rows.Err()
 }
