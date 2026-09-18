@@ -270,7 +270,39 @@ func (s *Server) routes() {
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	s.metrics.IncHTTP()
+	// Browser navigation (GET + Accept: text/html) to a frontend route:
+	// serve the SPA shell instead of API JSON. This prevents /roles,
+	// /projects, /dashboard etc. from returning raw JSON on page refresh.
+	if r.Method == http.MethodGet && isBrowserNav(r) && !isNonHTMLResource(r.URL.Path) {
+		s.handleStatic(w, r)
+		return
+	}
 	s.mux.ServeHTTP(w, r)
+}
+
+// isBrowserNav reports whether the request looks like a browser page load
+// (as opposed to an API/fetch call).
+func isBrowserNav(r *http.Request) bool {
+	accept := r.Header.Get("Accept")
+	return strings.Contains(accept, "text/html")
+}
+
+// isNonHTMLResource reports whether the path serves non-HTML content
+// (git protocol, static assets, metrics, health checks, file downloads).
+// API routes like /changes/, /projects/, /roles/ are NOT included here
+// because they should serve the SPA shell on browser navigation.
+func isNonHTMLResource(p string) bool {
+	prefixes := []string{
+		"/git/", "/a/", "/metrics", "/healthz", "/readyz",
+		"/oauth/", "/assets/", "/static/", "/favicon",
+		"/stream-events",
+	}
+	for _, prefix := range prefixes {
+		if strings.HasPrefix(p, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 // ---------- helpers ----------
