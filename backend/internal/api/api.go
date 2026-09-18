@@ -642,7 +642,16 @@ func (s *Server) gitMiddleware() http.Handler {
 			}
 			pusher = acct
 			remoteUser = acct.Username
-		} else if !s.canReadProject(s.optionalAccount(r), project) {
+		} else if acct := s.optionalAccount(r); !s.canReadProject(acct, project) {
+			// Git clients only send Basic credentials after a 401 challenge,
+			// so unauthenticated readers must be challenged rather than shown
+			// a 404; authenticated users without read access still get 404 to
+			// keep hidden projects invisible.
+			if acct == nil {
+				w.Header().Set("WWW-Authenticate", `Basic realm="gerrit-go"`)
+				http.Error(w, "authentication required", http.StatusUnauthorized)
+				return
+			}
 			http.Error(w, "repository not found", http.StatusNotFound)
 			return
 		}
