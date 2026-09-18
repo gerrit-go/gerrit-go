@@ -257,6 +257,23 @@ func (d *DB) ListAccessRulesInherited(project string) ([]*AccessRule, error) {
 }
 
 // SetAccessRules replaces all rules of a project with the given set.
+// AddAccessRule inserts a single access rule without affecting existing rules.
+func (d *DB) AddAccessRule(r *AccessRule) error {
+	action := r.Action
+	if action == "" {
+		action = "ALLOW"
+	}
+	_, err := d.db.Exec(
+		`INSERT INTO access_rules(project, ref_pattern, permission, group_id, action, exclusive, min_val, max_val)
+		 VALUES(?,?,?,?,?,?,?,?)`,
+		r.Project, r.RefPattern, r.Permission, r.GroupID, action, b2i(r.Exclusive), r.Min, r.Max)
+	if err != nil {
+		return err
+	}
+	d.perm.invalidateRules()
+	return nil
+}
+
 func (d *DB) SetAccessRules(project string, rules []*AccessRule) error {
 	tx, err := d.db.Begin()
 	if err != nil {
