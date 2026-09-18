@@ -97,21 +97,21 @@ func (s *Server) groupIDs(acct *store.Account) map[int64]bool {
 }
 
 // checkAccess evaluates a permission for acct on a project at a given ref.
-// It first checks RBAC role bindings; if any match, their permissions take
-// precedence. Otherwise it falls back to the legacy access_rules evaluation.
+// Two grant sources are unioned: RBAC role bindings and the legacy
+// access_rules inheritance chain. Either one allowing is enough; with no rule
+// or binding covering the caller the outcome is denial (default-deny).
 // Administrators bypass all checks.
 func (s *Server) checkAccess(acct *store.Account, project, ref, permission string) access {
 	if acct != nil && acct.Admin {
 		return access{allowed: true, min: -2, max: 2}
 	}
 
-	// RBAC evaluation: if the account has role bindings covering this project,
-	// use the merged role permissions instead of access_rules.
+	// RBAC role bindings act as an additive grant.
 	if acct != nil {
 		groups := s.groupIDs(acct)
 		rbacPerms, err := s.db.RBACPermissions(acct.ID, groups, project)
-		if err == nil && len(rbacPerms) > 0 {
-			return rbacToAccess(rbacPerms, permission)
+		if err == nil && rbacToAccess(rbacPerms, permission).allowed {
+			return access{allowed: true, min: -2, max: 2}
 		}
 	}
 
@@ -191,9 +191,19 @@ func (s *Server) can(acct *store.Account, project, ref, permission string) bool 
 }
 
 // canCapability checks a global capability (project-independent, ref-agnostic).
+// Both grant sources apply: a role binding at global scope ("*") or a legacy
+// global access rule.
 func (s *Server) canCapability(acct *store.Account, permission string) bool {
 	if acct != nil && acct.Admin {
 		return true
+	}
+	if acct != nil {
+		groups := s.groupIDs(acct)
+		if perms, err := s.db.RBACPermissions(acct.ID, groups, "*"); err == nil {
+			if rbacToAccess(perms, permission).allowed {
+				return true
+			}
+		}
 	}
 	rules, err := s.db.ListAccessRules("*")
 	if err != nil {

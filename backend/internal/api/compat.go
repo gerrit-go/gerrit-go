@@ -482,6 +482,10 @@ func (s *Server) compatGetProject(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
 	// Gerrit uses URL-encoded project names (e.g. "my%2Fproject").
 	name = strings.ReplaceAll(name, "%2F", "/")
+	if !s.canReadProject(s.compatAuth(r), name) {
+		compatWriteJSON(w, http.StatusNotFound, map[string]string{"error": "project not found"})
+		return
+	}
 	p, err := s.db.GetProject(name)
 	if err != nil {
 		compatWriteJSON(w, http.StatusNotFound, map[string]string{"error": "project not found"})

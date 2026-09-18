@@ -2,6 +2,7 @@ package store
 
 import (
 	"database/sql"
+	"strconv"
 	"strings"
 	"time"
 
@@ -424,7 +425,11 @@ CREATE TABLE IF NOT EXISTS role_bindings (
   created TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_rb_subject ON role_bindings(subject_type, subject_id);
-CREATE INDEX IF NOT EXISTS idx_rb_role ON role_bindings(role_id);`
+CREATE INDEX IF NOT EXISTS idx_rb_role ON role_bindings(role_id);
+CREATE TABLE IF NOT EXISTS app_meta (
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL
+);`
 
 func migrate(db *sql.DB, drv string) error {
 	schema := schemaSQLite
@@ -493,11 +498,19 @@ func migrate(db *sql.DB, drv string) error {
 	if err := seedDefaults(db); err != nil {
 		return err
 	}
+	if err := migrateDefaultDeny(db); err != nil {
+		return err
+	}
 	return nil
 }
 
 // seedDefaults creates the built-in groups and the global (All-Projects,
 // project='*') access rules on first run. It is idempotent.
+//
+// The permission model is default-deny: only the Administrators group gets a
+// global grant. Everything else must come from an explicit RBAC role binding
+// or a per-project access rule, so a fresh server isolates tenants until an
+// admin grants access.
 func seedDefaults(db *sql.DB) error {
 	for _, g := range []struct {
 		name, desc string
@@ -512,20 +525,12 @@ func seedDefaults(db *sql.DB) error {
 			return err
 		}
 	}
-	// Global default rules so a fresh server is usable out of the box.
 	type rule struct {
 		ref, perm, group, action string
 		min, max                 int
 	}
 	rules := []rule{
 		{"refs/*", "read", "Administrators", "ALLOW", 0, 0},
-		{"refs/*", "read", "Anonymous Users", "ALLOW", 0, 0},
-		{"refs/*", "read", "Registered Users", "ALLOW", 0, 0},
-		{"refs/for/*", "push", "Registered Users", "ALLOW", 0, 0},
-		{"refs/*", "comment", "Registered Users", "ALLOW", 0, 0},
-		{"refs/*", "label-Code-Review", "Registered Users", "ALLOW", -1, 1},
-		{"refs/*", "label-Verified", "Registered Users", "ALLOW", -1, 1},
-		{"*", "createProject", "Registered Users", "ALLOW", 0, 0},
 	}
 	var n int
 	if err := db.QueryRow(`SELECT COUNT(*) FROM access_rules WHERE project='*'`).Scan(&n); err != nil {
@@ -546,6 +551,70 @@ func seedDefaults(db *sql.DB) error {
 		}
 	}
 	return nil
+}
+
+// permissionModelMetaKey gates the one-time default-deny migration.
+const permissionModelMetaKey = "permission_model"
+
+// legacyPermissiveSeeds lists the global ALLOW rules that older builds seeded
+// for everyone. migrateDefaultDeny deletes exactly these rows so that any
+// hand-written rule survives.
+var legacyPermissiveSeeds = []struct{ ref, perm, group string }{
+	{"refs/*", "read", "Anonymous Users"},
+	{"refs/*", "read", "Registered Users"},
+	{"refs/for/*", "push", "Registered Users"},
+	{"refs/*", "comment", "Registered Users"},
+	{"refs/*", "label-Code-Review", "Registered Users"},
+	{"refs/*", "label-Verified", "Registered Users"},
+	{"*", "createProject", "Registered Users"},
+}
+
+// migrateDefaultDeny upgrades databases created under the open-by-default
+// model: it removes the permissive global seed rules and records the new
+// permission model in app_meta. Idempotent; the removed row count is written
+// to the audit log so the change is traceable on production instances.
+func migrateDefaultDeny(db *sql.DB) error {
+	var model string
+	_ = db.QueryRow(`SELECT value FROM app_meta WHERE key=?`, permissionModelMetaKey).Scan(&model)
+	if model == "default-deny-v1" {
+		return nil
+	}
+	removed := 0
+	for _, s := range legacyPermissiveSeeds {
+		res, err := db.Exec(
+			`DELETE FROM access_rules
+			 WHERE project='*' AND ref_pattern=? AND permission=? AND action='ALLOW'
+			   AND group_id IN (SELECT id FROM groups WHERE name=?)`,
+			s.ref, s.perm, s.group)
+		if err != nil {
+			return err
+		}
+		if n, err := res.RowsAffected(); err == nil {
+			removed += int(n)
+		}
+	}
+	if _, err := db.Exec(
+		`INSERT INTO app_meta(key, value) VALUES(?, 'default-deny-v1')
+		 ON CONFLICT(key) DO UPDATE SET value='default-deny-v1'`, permissionModelMetaKey); err != nil {
+		return err
+	}
+	if removed > 0 {
+		if _, err := db.Exec(
+			`INSERT INTO audit_log(account_id, action, target_type, target_id, detail, created)
+			 VALUES(0, 'permission-model-default-deny', 'server', '', ?, ?)`,
+			"removed "+strconv.Itoa(removed)+" permissive global rules", now()); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// PermissionModel reports the active permission model marker, e.g.
+// "default-deny-v1". Empty means a database predating the migration.
+func (d *DB) PermissionModel() string {
+	var v string
+	_ = d.db.QueryRow(`SELECT value FROM app_meta WHERE key=?`, permissionModelMetaKey).Scan(&v)
+	return v
 }
 
 // addColumnIfMissing adds a column to a table when an older schema lacks it.

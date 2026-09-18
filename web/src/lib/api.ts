@@ -197,6 +197,23 @@ export interface RoleBinding {
   scope: string;
 }
 
+export interface AuditEntry {
+  id: number;
+  account_id: number;
+  action: string;
+  target_type?: string;
+  target_id?: string;
+  detail?: string;
+  created: string;
+  username?: string;
+}
+
+export interface AuditPage {
+  entries: AuditEntry[];
+  total: number;
+  actions: string[];
+}
+
 export const SUBMIT_TYPES = [
   "FAST_FORWARD_ONLY",
   "REBASE_IF_NECESSARY",
@@ -519,6 +536,20 @@ export const api = {
   effectivePermissions: (project?: string) =>
     request<Record<string, unknown>>(`/accounts/self/permissions${project ? `?project=${encodeURIComponent(project)}` : ""}`),
 
+  // Audit log (admin only)
+  listAudit: (params: { n?: number; start?: number; action?: string; actor?: string; target_type?: string; target_id?: string } = {}) =>
+    {
+      const q = new URLSearchParams();
+      if (params.n) q.set("n", String(params.n));
+      if (params.start) q.set("start", String(params.start));
+      if (params.action) q.set("action", params.action);
+      if (params.actor) q.set("actor", params.actor);
+      if (params.target_type) q.set("target_type", params.target_type);
+      if (params.target_id) q.set("target_id", params.target_id);
+      const s = q.toString();
+      return request<AuditPage>(`/admin/audit${s ? "?" + s : ""}`);
+    },
+
   listChanges: (q = "") => request<ChangeInfo[]>(`/changes/?q=${encodeURIComponent(q)}`),
   listChangesPaged: async (
     q = "",
@@ -745,7 +776,7 @@ export const api = {
       body: JSON.stringify(id ? { id } : {}),
     }),
 
-  getConfig: () => request<{ auth: { oauth: boolean; ldap?: boolean; register?: boolean }; ssh?: { port?: string } }>("/config"),
+  getConfig: () => request<{ auth: { oauth: boolean; ldap?: boolean; register?: boolean }; ssh?: { port?: string }; permission_model?: string }>("/config"),
   updateSelf: (body: { name?: string; email?: string }) =>
     request<AccountInfo>("/accounts/self", { method: "PUT", body: JSON.stringify(body) }),
   setPassword: (oldPassword: string, newPassword: string) =>

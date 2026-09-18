@@ -223,11 +223,46 @@ func (d *DB) AppendAudit(accountID int64, action, targetType, targetID, detail s
 	return err
 }
 
+// AuditFilter narrows an audit-log query. Empty fields are ignored.
+type AuditFilter struct {
+	Action     string
+	TargetType string
+	TargetID   string
+	Actor      string // username, case-insensitive substring
+}
+
+func (f AuditFilter) whereAndArgs() (string, []any) {
+	var conds []string
+	var args []any
+	if f.Action != "" {
+		conds = append(conds, "e.action=?")
+		args = append(args, f.Action)
+	}
+	if f.TargetType != "" {
+		conds = append(conds, "e.target_type=?")
+		args = append(args, f.TargetType)
+	}
+	if f.TargetID != "" {
+		conds = append(conds, "e.target_id=?")
+		args = append(args, f.TargetID)
+	}
+	if f.Actor != "" {
+		conds = append(conds, `LOWER(a.username) LIKE ?`)
+		args = append(args, "%"+strings.ToLower(f.Actor)+"%")
+	}
+	if len(conds) == 0 {
+		return "", args
+	}
+	return " WHERE " + strings.Join(conds, " AND "), args
+}
+
 // ListAudit returns the most recent audit entries (newest first) with the
 // acting account's username, plus the total row count for pagination.
-func (d *DB) ListAudit(limit, offset int) ([]*AuditEntry, []string, int, error) {
+func (d *DB) ListAudit(f AuditFilter, limit, offset int) ([]*AuditEntry, []string, int, error) {
+	where, args := f.whereAndArgs()
+	const from = ` FROM audit_log e LEFT JOIN accounts a ON a.id = e.account_id`
 	var total int
-	if err := d.db.QueryRow(`SELECT COUNT(*) FROM audit_log`).Scan(&total); err != nil {
+	if err := d.db.QueryRow(`SELECT COUNT(*)`+from+where, args...).Scan(&total); err != nil {
 		return nil, nil, 0, err
 	}
 	if limit <= 0 {
@@ -235,9 +270,8 @@ func (d *DB) ListAudit(limit, offset int) ([]*AuditEntry, []string, int, error) 
 	}
 	rows, err := d.db.Query(
 		`SELECT e.id, e.account_id, e.action, e.target_type, e.target_id, e.detail, e.created,
-		        COALESCE(a.username, '')
-		 FROM audit_log e LEFT JOIN accounts a ON a.id = e.account_id
-		 ORDER BY e.id DESC LIMIT ? OFFSET ?`, limit, offset)
+		        COALESCE(a.username, '')`+from+where+`
+		 ORDER BY e.id DESC LIMIT ? OFFSET ?`, append(args, limit, offset)...)
 	if err != nil {
 		return nil, nil, 0, err
 	}
@@ -258,6 +292,24 @@ func (d *DB) ListAudit(limit, offset int) ([]*AuditEntry, []string, int, error) 
 		return nil, nil, 0, err
 	}
 	return out, users, total, nil
+}
+
+// ListAuditActions returns the distinct recorded actions for filter dropdowns.
+func (d *DB) ListAuditActions() ([]string, error) {
+	rows, err := d.db.Query(`SELECT DISTINCT action FROM audit_log ORDER BY action`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var a string
+		if err := rows.Scan(&a); err != nil {
+			return nil, err
+		}
+		out = append(out, a)
+	}
+	return out, rows.Err()
 }
 
 // CountChangesByStatus returns open/merged/abandoned counts for metrics gauges.

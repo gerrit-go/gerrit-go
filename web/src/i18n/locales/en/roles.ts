@@ -11,6 +11,8 @@ export default {
   noBindings: "No bindings yet",
   subjectType: "Type",
   subjectId: "ID",
+  subjectPick: "Subject",
+  selectSubject: "— Select —",
   scope: "Scope",
   group: "Group",
   account: "Account",

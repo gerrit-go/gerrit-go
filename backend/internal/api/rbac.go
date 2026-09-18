@@ -3,6 +3,7 @@ package api
 import (
 	"net/http"
 	"strconv"
+	"strings"
 
 	"gerrit-go/internal/store"
 )
@@ -58,6 +59,8 @@ func (s *Server) handleCreateRole(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusConflict, err.Error())
 		return
 	}
+	s.audit(acct, "role-create", "role", strconv.FormatInt(role.ID, 10),
+		role.Name+" perms="+strings.Join(role.Permissions, ","))
 	writeJSON(w, http.StatusCreated, role)
 }
 
@@ -93,6 +96,8 @@ func (s *Server) handleUpdateRole(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	s.audit(acct, "role-update", "role", strconv.FormatInt(role.ID, 10),
+		role.Name+" perms="+strings.Join(role.Permissions, ","))
 	writeJSON(w, http.StatusOK, role)
 }
 
@@ -111,6 +116,7 @@ func (s *Server) handleDeleteRole(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	s.audit(acct, "role-delete", "role", strconv.FormatInt(id, 10), "")
 	writeJSON(w, http.StatusOK, nil)
 }
 
@@ -167,6 +173,8 @@ func (s *Server) handleCreateRoleBinding(w http.ResponseWriter, r *http.Request)
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	s.audit(acct, "binding-create", "role-binding", strconv.FormatInt(rb.ID, 10),
+		"role="+strconv.FormatInt(roleID, 10)+" subject="+req.SubjectType+":"+strconv.FormatInt(req.SubjectID, 10)+" scope="+rb.Scope)
 	writeJSON(w, http.StatusCreated, rb)
 }
 
@@ -185,6 +193,7 @@ func (s *Server) handleDeleteRoleBinding(w http.ResponseWriter, r *http.Request)
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	s.audit(acct, "binding-delete", "role-binding", strconv.FormatInt(id, 10), "")
 	writeJSON(w, http.StatusOK, nil)
 }
 

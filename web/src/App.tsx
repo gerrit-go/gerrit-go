@@ -1,5 +1,5 @@
 import { Link, NavLink, Route, Routes, useNavigate } from "react-router-dom";
-import { GitPullRequestArrow, FolderGit2, LogOut, Search, Sun, Moon, Monitor, Check, Users, LayoutDashboard, Settings, Languages, Menu, ShieldCheck } from "lucide-react";
+import { GitPullRequestArrow, FolderGit2, LogOut, Search, Sun, Moon, Monitor, Check, Users, LayoutDashboard, Settings, Languages, Menu, ShieldCheck, ScrollText } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useAuth } from "@/auth";
@@ -24,6 +24,7 @@ import ProjectsPage from "@/pages/ProjectsPage";
 import ProjectDetailPage from "@/pages/ProjectDetailPage";
 import GroupsPage from "@/pages/GroupsPage";
 import RolesPage from "@/pages/RolesPage";
+import AuditPage from "@/pages/AuditPage";
 import LoginPage from "@/pages/LoginPage";
 import NotificationBell from "@/components/NotificationBell";
 import ShortcutsHelp from "@/components/ShortcutsHelp";
@@ -90,6 +91,7 @@ function MobileNav() {
     { to: "/projects", label: t("nav.projects"), icon: FolderGit2 },
     ...(user ? [{ to: "/groups", label: t("nav.groups"), icon: Users }] : []),
     ...(user?.admin ? [{ to: "/roles", label: t("nav.roles"), icon: ShieldCheck }] : []),
+    ...(user?.admin ? [{ to: "/audit", label: t("nav.audit"), icon: ScrollText }] : []),
   ];
   const themeOptions: { value: Theme; label: string; icon: typeof Sun }[] = [
     { value: "light", label: t("theme.light"), icon: Sun },
@@ -328,6 +330,7 @@ export default function App() {
           <Route path="/projects/*" element={<ProjectDetailPage />} />
           <Route path="/groups" element={<GroupsPage />} />
           <Route path="/roles" element={<RolesPage />} />
+          <Route path="/audit" element={<AuditPage />} />
           <Route path="/c/:num" element={<ChangeDetailPage />} />
           <Route path="*" element={<NotFound />} />
         </Routes>
