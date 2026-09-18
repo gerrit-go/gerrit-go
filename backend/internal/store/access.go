@@ -2,6 +2,7 @@ package store
 
 import (
 	"database/sql"
+	"encoding/json"
 	"strings"
 	"time"
 )
@@ -654,4 +655,248 @@ func (d *DB) MarkNotificationRead(accountID, id int64) error {
 func (d *DB) MarkAllNotificationsRead(accountID int64) error {
 	_, err := d.db.Exec(`UPDATE notifications SET read=1 WHERE account_id=? AND read=0`, accountID)
 	return err
+}
+
+// ---------- RBAC: roles and role bindings ----------
+
+// Role defines a named set of permissions that can be bound to users or groups.
+type Role struct {
+	ID          int64    `json:"id"`
+	Name        string   `json:"name"`
+	DisplayName string   `json:"display_name"`
+	Description string   `json:"description"`
+	Permissions []string `json:"permissions"`
+	Created     time.Time `json:"created"`
+}
+
+// RoleBinding assigns a role to a subject (account or group) within a scope.
+// Scope can be: "*" (global), a project name, a namespace prefix (e.g. "rk/*"),
+// or a label selector (e.g. "label:product=android").
+type RoleBinding struct {
+	ID          int64     `json:"id"`
+	RoleID      int64     `json:"role_id"`
+	RoleName    string    `json:"role_name,omitempty"`
+	SubjectType string    `json:"subject_type"` // "account" | "group"
+	SubjectID   int64     `json:"subject_id"`
+	Scope       string    `json:"scope"`
+	Created     time.Time `json:"created"`
+}
+
+// CreateRole inserts a new role.
+func (d *DB) CreateRole(r *Role) error {
+	perms, _ := json.Marshal(r.Permissions)
+	id, err := d.insertID(
+		`INSERT INTO roles(name, display_name, description, permissions, created) VALUES(?,?,?,?,?)`,
+		"id", r.Name, r.DisplayName, r.Description, string(perms), now())
+	if err != nil {
+		return err
+	}
+	r.ID = id
+	return nil
+}
+
+// UpdateRole modifies an existing role.
+func (d *DB) UpdateRole(r *Role) error {
+	perms, _ := json.Marshal(r.Permissions)
+	_, err := d.db.Exec(`UPDATE roles SET display_name=?, description=?, permissions=? WHERE id=?`,
+		r.DisplayName, r.Description, string(perms), r.ID)
+	return err
+}
+
+// DeleteRole removes a role and its bindings.
+func (d *DB) DeleteRole(id int64) error {
+	_, err := d.db.Exec(`DELETE FROM roles WHERE id=?`, id)
+	return err
+}
+
+// GetRole returns a role by ID.
+func (d *DB) GetRole(id int64) (*Role, error) {
+	return d.scanRole(d.db.QueryRow(`SELECT id, name, display_name, description, permissions, created FROM roles WHERE id=?`, id))
+}
+
+// GetRoleByName returns a role by name.
+func (d *DB) GetRoleByName(name string) (*Role, error) {
+	return d.scanRole(d.db.QueryRow(`SELECT id, name, display_name, description, permissions, created FROM roles WHERE name=?`, name))
+}
+
+// ListRoles returns all roles.
+func (d *DB) ListRoles() ([]*Role, error) {
+	rows, err := d.db.Query(`SELECT id, name, display_name, description, permissions, created FROM roles ORDER BY name`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []*Role
+	for rows.Next() {
+		r, err := d.scanRole(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+func (d *DB) scanRole(row interface{ Scan(...any) error }) (*Role, error) {
+	r := &Role{}
+	var perms, created string
+	if err := row.Scan(&r.ID, &r.Name, &r.DisplayName, &r.Description, &perms, &created); err != nil {
+		return nil, err
+	}
+	json.Unmarshal([]byte(perms), &r.Permissions)
+	r.Created = parseTime(created)
+	return r, nil
+}
+
+// CreateRoleBinding inserts a new role binding.
+func (d *DB) CreateRoleBinding(rb *RoleBinding) error {
+	id, err := d.insertID(
+		`INSERT INTO role_bindings(role_id, subject_type, subject_id, scope, created) VALUES(?,?,?,?,?)`,
+		"id", rb.RoleID, rb.SubjectType, rb.SubjectID, rb.Scope, now())
+	if err != nil {
+		return err
+	}
+	rb.ID = id
+	return nil
+}
+
+// DeleteRoleBinding removes a binding by ID.
+func (d *DB) DeleteRoleBinding(id int64) error {
+	_, err := d.db.Exec(`DELETE FROM role_bindings WHERE id=?`, id)
+	return err
+}
+
+// ListRoleBindings returns bindings, optionally filtered by role or subject.
+func (d *DB) ListRoleBindings(roleID int64, subjectType string, subjectID int64) ([]*RoleBinding, error) {
+	query := `SELECT rb.id, rb.role_id, r.name, rb.subject_type, rb.subject_id, rb.scope, rb.created
+		FROM role_bindings rb JOIN roles r ON r.id = rb.role_id`
+	var args []any
+	var conds []string
+	if roleID > 0 {
+		conds = append(conds, "rb.role_id=?")
+		args = append(args, roleID)
+	}
+	if subjectType != "" {
+		conds = append(conds, "rb.subject_type=?")
+		args = append(args, subjectType)
+	}
+	if subjectID > 0 {
+		conds = append(conds, "rb.subject_id=?")
+		args = append(args, subjectID)
+	}
+	if len(conds) > 0 {
+		query += " WHERE " + strings.Join(conds, " AND ")
+	}
+	query += " ORDER BY rb.id"
+	rows, err := d.db.Query(query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []*RoleBinding
+	for rows.Next() {
+		rb := &RoleBinding{}
+		var created string
+		if err := rows.Scan(&rb.ID, &rb.RoleID, &rb.RoleName, &rb.SubjectType, &rb.SubjectID, &rb.Scope, &created); err != nil {
+			return nil, err
+		}
+		rb.Created = parseTime(created)
+		out = append(out, rb)
+	}
+	return out, rows.Err()
+}
+
+// RoleBindingsForAccount returns all role bindings applicable to an account:
+// direct account bindings plus bindings via group membership.
+func (d *DB) RoleBindingsForAccount(accountID int64, groupIDs map[int64]bool) ([]*RoleBinding, error) {
+	// Direct account bindings.
+	direct, err := d.ListRoleBindings(0, "account", accountID)
+	if err != nil {
+		return nil, err
+	}
+	out := direct
+	// Group bindings.
+	for gid := range groupIDs {
+		gbs, err := d.ListRoleBindings(0, "group", gid)
+		if err != nil {
+			continue
+		}
+		out = append(out, gbs...)
+	}
+	return out, nil
+}
+
+// RBACPermissions evaluates the effective permissions for an account on a
+// project by collecting all matching role bindings and merging their role
+// permissions. Returns the union of permission strings.
+func (d *DB) RBACPermissions(accountID int64, groupIDs map[int64]bool, project string) (map[string]bool, error) {
+	bindings, err := d.RoleBindingsForAccount(accountID, groupIDs)
+	if err != nil {
+		return nil, err
+	}
+	perms := map[string]bool{}
+	for _, rb := range bindings {
+		if !d.scopeMatchesDB(rb.Scope, project) {
+			continue
+		}
+		role, err := d.GetRole(rb.RoleID)
+		if err != nil {
+			continue
+		}
+		for _, p := range role.Permissions {
+			perms[p] = true
+		}
+	}
+	return perms, nil
+}
+
+// scopeMatchesDB is like ScopeMatches but can also evaluate label selectors
+// by querying the project_labels table.
+func (d *DB) scopeMatchesDB(scope, project string) bool {
+	if strings.HasPrefix(scope, "label:") {
+		sel := strings.TrimPrefix(scope, "label:")
+		key, value, _ := strings.Cut(sel, "=")
+		if key == "" {
+			return false
+		}
+		labels, err := d.GetProjectLabels(project)
+		if err != nil {
+			return false
+		}
+		v, ok := labels[key]
+		if !ok {
+			return false
+		}
+		return value == "" || v == value
+	}
+	return ScopeMatches(scope, project)
+}
+
+// ScopeMatches checks whether a role binding scope covers the given project.
+// Supported forms:
+//   "*"              — matches everything
+//   "project/name"   — exact project match
+//   "prefix/*"       — namespace prefix match
+//   "label:k=v"      — label selector (requires project to have label k=v)
+func ScopeMatches(scope, project string) bool {
+	if scope == "" || scope == "*" {
+		return true
+	}
+	if scope == project {
+		return true
+	}
+	if strings.HasPrefix(scope, "label:") {
+		// Label selectors are evaluated by the caller (needs DB access).
+		return false
+	}
+	// Namespace prefix: "rk/*" matches "rk/kernel", "rk/device/rockchip", etc.
+	if strings.HasSuffix(scope, "/*") {
+		prefix := strings.TrimSuffix(scope, "/*")
+		return strings.HasPrefix(project, prefix+"/") || project == prefix
+	}
+	// Bare prefix without wildcard: "rk" matches "rk/kernel" but not "rk" itself.
+	if !strings.Contains(scope, "/") {
+		return strings.HasPrefix(project, scope+"/")
+	}
+	return false
 }

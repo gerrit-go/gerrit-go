@@ -5,6 +5,7 @@ export default {
     changes: "变更",
     projects: "项目",
     groups: "用户组",
+    roles: "角色",
     menu: "菜单",
   },
   action: {

@@ -97,15 +97,25 @@ func (s *Server) groupIDs(acct *store.Account) map[int64]bool {
 }
 
 // checkAccess evaluates a permission for acct on a project at a given ref.
-// Administrators bypass all checks. Rules are collected from the project and
-// all its ancestors up the parent chain plus the global '*' defaults; the most
-// specific ref pattern across the whole merged set controls, and within that
-// tier a BLOCK/DENY for any of the caller's groups vetoes (regardless of which
-// level declared it) while ALLOWs combine (label ranges union).
+// It first checks RBAC role bindings; if any match, their permissions take
+// precedence. Otherwise it falls back to the legacy access_rules evaluation.
+// Administrators bypass all checks.
 func (s *Server) checkAccess(acct *store.Account, project, ref, permission string) access {
 	if acct != nil && acct.Admin {
 		return access{allowed: true, min: -2, max: 2}
 	}
+
+	// RBAC evaluation: if the account has role bindings covering this project,
+	// use the merged role permissions instead of access_rules.
+	if acct != nil {
+		groups := s.groupIDs(acct)
+		rbacPerms, err := s.db.RBACPermissions(acct.ID, groups, project)
+		if err == nil && len(rbacPerms) > 0 {
+			return rbacToAccess(rbacPerms, permission)
+		}
+	}
+
+	// Legacy access_rules evaluation.
 	rules, err := s.db.ListAccessRulesInherited(project)
 	if err != nil {
 		return access{}
@@ -152,6 +162,27 @@ func (s *Server) checkAccess(acct *store.Account, project, ref, permission strin
 		}
 	}
 	return res
+}
+
+// rbacToAccess converts a set of RBAC permission strings to an access result.
+// Permission strings can be plain ("read", "push", "submit") or ranged
+// ("review:+2", "label:Code-Review:-2..+2").
+func rbacToAccess(perms map[string]bool, permission string) access {
+	// Direct match.
+	if perms[permission] {
+		return access{allowed: true, min: -2, max: 2}
+	}
+	// Check for wildcard or admin-level permissions.
+	if perms["admin"] || perms["*"] {
+		return access{allowed: true, min: -2, max: 2}
+	}
+	// Check for label/ranged permissions: "label:Code-Review" or "review:+2".
+	for p := range perms {
+		if strings.HasPrefix(p, permission+":") || strings.HasPrefix(p, "label:"+permission) {
+			return access{allowed: true, min: -2, max: 2}
+		}
+	}
+	return access{}
 }
 
 // can is a boolean convenience wrapper over checkAccess.

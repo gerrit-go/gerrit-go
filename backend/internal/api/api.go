@@ -173,6 +173,17 @@ func (s *Server) routes() {
 	mux.HandleFunc("PUT /groups/{id}/members/{account}", s.requireAuth(s.handleAddGroupMember))
 	mux.HandleFunc("DELETE /groups/{id}/members/{account}", s.requireAuth(s.handleDeleteGroupMember))
 
+	// RBAC: roles and role bindings.
+	mux.HandleFunc("GET /roles/", s.handleListRoles)
+	mux.HandleFunc("POST /roles/", s.requireAuth(s.handleCreateRole))
+	mux.HandleFunc("GET /roles/{id}", s.handleGetRole)
+	mux.HandleFunc("PUT /roles/{id}", s.requireAuth(s.handleUpdateRole))
+	mux.HandleFunc("DELETE /roles/{id}", s.requireAuth(s.handleDeleteRole))
+	mux.HandleFunc("GET /roles/{id}/bindings", s.handleListRoleBindings)
+	mux.HandleFunc("POST /roles/{id}/bindings", s.requireAuth(s.handleCreateRoleBinding))
+	mux.HandleFunc("DELETE /role-bindings/{id}", s.requireAuth(s.handleDeleteRoleBinding))
+	mux.HandleFunc("GET /accounts/self/permissions", s.requireAuth(s.handleEffectivePermissions))
+
 	// Changes.
 	mux.HandleFunc("GET /changes/", s.handleListChanges)
 	mux.HandleFunc("GET /changes/{num}", s.handleChangeDetail)
