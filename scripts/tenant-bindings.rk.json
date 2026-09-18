@@ -1,0 +1,30 @@
+{
+  "_comment": [
+    "RK solution team RBAC baseline. Apply with scripts/apply-rbac.py (idempotent:",
+    "roles are created or updated to match this file; bindings are created if missing).",
+    "Future org changes are config edits here, e.g.:",
+    "  - new chip solution 'aw': copy this file to tenant-bindings.aw.json, rename",
+    "    role to aw-developer, bind at scope 'aw/*' (after that namespace exists).",
+    "  - split Linux/Android teams: add role rk-linux-developer bound to",
+    "    'rk/Linux/*' (or 'label:os=linux') for group rk-linux-team, and narrow the",
+    "    existing binding's scope via the Web UI (Roles page) or DELETE /role-bindings/{id}.",
+    "Permissions vocabulary: read, push, submit, abandon, comment, editTopicName,",
+    "addReviewer, createProject, editAccess, plus label-<Code>. (perm.go)",
+    "Scope forms: '*' global | '<exact/project>' | 'prefix/*' namespace tree |",
+    "'label:key=value' labeled projects."
+  ],
+  "groups": [
+    { "name": "rk-team", "description": "RK solution team (member container for future per-team bindings)" }
+  ],
+  "roles": [
+    {
+      "name": "rk-developer",
+      "display_name": "RK Development",
+      "description": "read/push/review/submit across the whole rk/ namespace tree",
+      "permissions": ["read", "push", "submit", "comment", "editTopicName", "addReviewer", "abandon"]
+    }
+  ],
+  "bindings": [
+    { "role": "rk-developer", "subject_type": "group", "subject": "Registered Users", "scope": "rk/*" }
+  ]
+}
