@@ -161,6 +161,8 @@ func (s *Server) routes() {
 	mux.HandleFunc("DELETE /projects/{name}", s.requireAuth(s.handleDeleteProject))
 	mux.HandleFunc("GET /projects/{name}/labels", s.handleGetProjectLabels)
 	mux.HandleFunc("PUT /projects/{name}/labels", s.requireAuth(s.handleSetProjectLabels))
+	mux.HandleFunc("POST /projects/{name}/rename", s.requireAuth(s.handleRenameProject))
+	mux.HandleFunc("POST /labels/bulk", s.requireAuth(s.handleBulkLabels))
 	mux.HandleFunc("GET /namespaces/", s.handleListNamespaces)
 	mux.HandleFunc("GET /labels/", s.handleListLabels)
 
@@ -181,6 +183,7 @@ func (s *Server) routes() {
 	mux.HandleFunc("DELETE /roles/{id}", s.requireAuth(s.handleDeleteRole))
 	mux.HandleFunc("GET /roles/{id}/bindings", s.handleListRoleBindings)
 	mux.HandleFunc("POST /roles/{id}/bindings", s.requireAuth(s.handleCreateRoleBinding))
+	mux.HandleFunc("GET /role-bindings/", s.requireAuth(s.handleListAllRoleBindings))
 	mux.HandleFunc("DELETE /role-bindings/{id}", s.requireAuth(s.handleDeleteRoleBinding))
 	mux.HandleFunc("GET /accounts/self/permissions", s.requireAuth(s.handleEffectivePermissions))
 
@@ -847,7 +850,7 @@ func (s *Server) handleSetProjectLabels(w http.ResponseWriter, r *http.Request) 
 			}
 		}
 	}
-	s.audit(acct, "labels-set", "project", name, fmt.Sprint(req))
+	s.audit(acct, "labels-set", "project", name, formatLabelOps(req))
 	labels, _ := s.db.GetProjectLabels(name)
 	writeJSON(w, http.StatusOK, labels)
 }

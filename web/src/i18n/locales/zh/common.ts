@@ -5,6 +5,7 @@ export default {
     changes: "变更",
     projects: "项目",
     groups: "用户组",
+    organization: "组织架构",
     roles: "角色",
     audit: "审计",
     menu: "菜单",

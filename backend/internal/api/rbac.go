@@ -122,6 +122,21 @@ func (s *Server) handleDeleteRole(w http.ResponseWriter, r *http.Request) {
 
 // ---------- role bindings ----------
 
+// handleListAllRoleBindings returns every binding (with role names) so the
+// organization page can show which roles apply to which scopes in one call.
+func (s *Server) handleListAllRoleBindings(w http.ResponseWriter, r *http.Request) {
+	if acct := s.account(r); acct == nil || !acct.Admin {
+		s.forbid(w, r, "admin")
+		return
+	}
+	bindings, err := s.db.ListRoleBindings(0, "", 0)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, bindings)
+}
+
 func (s *Server) handleListRoleBindings(w http.ResponseWriter, r *http.Request) {
 	roleID, _ := strconv.ParseInt(r.PathValue("id"), 10, 64)
 	bindings, err := s.db.ListRoleBindings(roleID, "", 0)

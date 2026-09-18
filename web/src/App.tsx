@@ -1,5 +1,5 @@
 import { Link, NavLink, Route, Routes, useNavigate } from "react-router-dom";
-import { GitPullRequestArrow, FolderGit2, LogOut, Search, Sun, Moon, Monitor, Check, Users, LayoutDashboard, Settings, Languages, Menu, ShieldCheck, ScrollText } from "lucide-react";
+import { GitPullRequestArrow, FolderGit2, LogOut, Search, Sun, Moon, Monitor, Check, Users, LayoutDashboard, Settings, Languages, Menu, ShieldCheck, ScrollText, Building2 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useAuth } from "@/auth";
@@ -25,6 +25,7 @@ import ProjectDetailPage from "@/pages/ProjectDetailPage";
 import GroupsPage from "@/pages/GroupsPage";
 import RolesPage from "@/pages/RolesPage";
 import AuditPage from "@/pages/AuditPage";
+import OrgPage from "@/pages/OrgPage";
 import LoginPage from "@/pages/LoginPage";
 import NotificationBell from "@/components/NotificationBell";
 import ShortcutsHelp from "@/components/ShortcutsHelp";
@@ -90,6 +91,7 @@ function MobileNav() {
     { to: "/", label: t("nav.changes"), icon: GitPullRequestArrow },
     { to: "/projects", label: t("nav.projects"), icon: FolderGit2 },
     ...(user ? [{ to: "/groups", label: t("nav.groups"), icon: Users }] : []),
+    ...(user?.admin ? [{ to: "/organization", label: t("nav.organization"), icon: Building2 }] : []),
     ...(user?.admin ? [{ to: "/roles", label: t("nav.roles"), icon: ShieldCheck }] : []),
     ...(user?.admin ? [{ to: "/audit", label: t("nav.audit"), icon: ScrollText }] : []),
   ];
@@ -220,6 +222,28 @@ function Header() {
               {t("nav.groups")}
             </NavLink>
           )}
+          {user?.admin &&
+            (
+              [
+                { to: "/organization", label: t("nav.organization"), icon: Building2 },
+                { to: "/roles", label: t("nav.roles"), icon: ShieldCheck },
+                { to: "/audit", label: t("nav.audit"), icon: ScrollText },
+              ] as { to: string; label: string; icon: typeof Sun }[]
+            ).map((l) => (
+              <NavLink
+                key={l.to}
+                to={l.to}
+                className={({ isActive }) =>
+                  cn(
+                    "flex items-center gap-1.5 rounded-md px-3 py-1.5 text-muted-foreground transition-colors hover:text-foreground hover:bg-accent",
+                    isActive && "bg-accent text-foreground font-medium",
+                  )
+                }
+              >
+                <l.icon className="size-4" />
+                {l.label}
+              </NavLink>
+            ))}
         </nav>
         <form onSubmit={onSearch} className="ml-auto hidden w-full max-w-sm md:block">
           <div className="relative">
@@ -331,6 +355,7 @@ export default function App() {
           <Route path="/groups" element={<GroupsPage />} />
           <Route path="/roles" element={<RolesPage />} />
           <Route path="/audit" element={<AuditPage />} />
+          <Route path="/organization" element={<OrgPage />} />
           <Route path="/c/:num" element={<ChangeDetailPage />} />
           <Route path="*" element={<NotFound />} />
         </Routes>

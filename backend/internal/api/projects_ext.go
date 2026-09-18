@@ -337,6 +337,118 @@ func (s *Server) handleDeleteProject(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// validProjectName rejects traversal-prone and malformed project names,
+// mirroring the gitsvc.CreateProject guards.
+func validProjectName(name string) bool {
+	return name != "" && !strings.Contains(name, "..") && !strings.HasPrefix(name, "/")
+}
+
+// handleRenameProject moves a project to a new name (typically into another
+// namespace). It updates every database reference and moves the repository
+// directory; the old name stops resolving immediately (no redirect shim).
+// Admin only.
+func (s *Server) handleRenameProject(w http.ResponseWriter, r *http.Request) {
+	acct := s.account(r)
+	oldName := r.PathValue("name")
+	if acct == nil || !acct.Admin {
+		s.forbid(w, r, "admin")
+		return
+	}
+	var req struct {
+		Name string `json:"name"`
+	}
+	if err := decodeJSON(r, &req); err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	newName := strings.TrimSuffix(strings.TrimSpace(req.Name), ".git")
+	if !validProjectName(newName) {
+		writeErr(w, http.StatusBadRequest, "invalid project name")
+		return
+	}
+	if newName == oldName {
+		writeErr(w, http.StatusBadRequest, "new name must differ from the current name")
+		return
+	}
+	if _, err := s.db.GetProject(oldName); err != nil {
+		writeErr(w, http.StatusNotFound, "project not found")
+		return
+	}
+	if _, err := s.db.GetProject(newName); err == nil {
+		writeErr(w, http.StatusConflict, "target project already exists")
+		return
+	}
+	if err := s.git.MoveRepo(oldName, newName); err != nil {
+		writeErr(w, mapGitErr(err), err.Error())
+		return
+	}
+	if err := s.db.RenameProject(oldName, newName); err != nil {
+		if rbErr := s.git.MoveRepo(newName, oldName); rbErr != nil {
+			writeErr(w, http.StatusInternalServerError,
+				"rename failed and repository rollback failed: "+err.Error()+" / "+rbErr.Error())
+			return
+		}
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	s.audit(acct, "project-rename", "project", newName, oldName+" -> "+newName)
+	writeJSON(w, http.StatusOK, map[string]any{"name": newName, "from": oldName})
+}
+
+// handleBulkLabels applies (or deletes, for null values) a set of labels on
+// many projects at once. Admin only.
+func (s *Server) handleBulkLabels(w http.ResponseWriter, r *http.Request) {
+	acct := s.account(r)
+	if acct == nil || !acct.Admin {
+		s.forbid(w, r, "admin")
+		return
+	}
+	var req struct {
+		Projects []string          `json:"projects"`
+		Labels   map[string]*string `json:"labels"`
+	}
+	if err := decodeJSON(r, &req); err != nil || len(req.Projects) == 0 || len(req.Labels) == 0 {
+		writeErr(w, http.StatusBadRequest, "projects and labels are required")
+		return
+	}
+	for _, name := range req.Projects {
+		if _, err := s.db.GetProject(name); err != nil {
+			writeErr(w, http.StatusNotFound, "project not found: "+name)
+			return
+		}
+	}
+	for _, name := range req.Projects {
+		for label, value := range req.Labels {
+			var err error
+			if value == nil {
+				err = s.db.DeleteProjectLabel(name, label)
+			} else {
+				err = s.db.SetProjectLabel(name, label, *value)
+			}
+			if err != nil {
+				writeErr(w, http.StatusInternalServerError, name+": "+err.Error())
+				return
+			}
+		}
+	}
+	s.audit(acct, "labels-bulk", "project", strings.Join(req.Projects, ","), formatLabelOps(req.Labels))
+	writeJSON(w, http.StatusOK, map[string]any{"projects": len(req.Projects), "labels": req.Labels})
+}
+
+// formatLabelOps renders a label mutation map as "k=v" pairs ("k-" when the
+// label is being deleted) so audit details stay human-readable.
+func formatLabelOps(labels map[string]*string) string {
+	parts := make([]string, 0, len(labels))
+	for k, v := range labels {
+		if v == nil {
+			parts = append(parts, k+"-")
+		} else {
+			parts = append(parts, k+"="+*v)
+		}
+	}
+	return strings.Join(parts, " ")
+}
+
 func firstNonEmpty(vals ...string) string {
 	for _, v := range vals {
 		if strings.TrimSpace(v) != "" {

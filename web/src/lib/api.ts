@@ -416,6 +416,17 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ name, description, copy_from: copyFrom || undefined }),
     }),
+  renameProject: (project: string, name: string) =>
+    request<{ name: string; from: string }>(`/projects/${encodeURIComponent(project)}/rename`, {
+      method: "POST",
+      body: JSON.stringify({ name }),
+    }),
+  bulkSetLabels: (projects: string[], labels: Record<string, string | null>) =>
+    request<{ projects: number }>("/labels/bulk", {
+      method: "POST",
+      body: JSON.stringify({ projects, labels }),
+    }),
+  listAllRoleBindings: () => request<RoleBinding[]>("/role-bindings/"),
   branches: (project: string) =>
     request<BranchInfo[]>(`/projects/${encodeURIComponent(project)}/branches`),
   commits: (project: string, revision?: string, n = 50) =>
