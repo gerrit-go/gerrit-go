@@ -373,11 +373,19 @@ func (s *Server) handleListAudit(w http.ResponseWriter, r *http.Request) {
 	if n, err := strconv.Atoi(r.URL.Query().Get("start")); err == nil && n > 0 {
 		offset = n
 	}
-	entries, users, total, err := s.db.ListAudit(limit, offset)
+	q := r.URL.Query()
+	filter := store.AuditFilter{
+		Action:     q.Get("action"),
+		TargetType: q.Get("target_type"),
+		TargetID:   q.Get("target_id"),
+		Actor:      q.Get("actor"),
+	}
+	entries, users, total, err := s.db.ListAudit(filter, limit, offset)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	actions, _ := s.db.ListAuditActions()
 	type row struct {
 		*store.AuditEntry
 		Username string `json:"username,omitempty"`
@@ -386,5 +394,5 @@ func (s *Server) handleListAudit(w http.ResponseWriter, r *http.Request) {
 	for i, e := range entries {
 		out = append(out, row{AuditEntry: e, Username: users[i]})
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"entries": out, "total": total})
+	writeJSON(w, http.StatusOK, map[string]any{"entries": out, "total": total, "actions": actions})
 }

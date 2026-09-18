@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Plus, ShieldCheck, Trash2, Users } from "lucide-react";
-import { api, type Role, type RoleBinding } from "@/lib/api";
+import { api, type Role, type RoleBinding, type AccountInfo, type GroupInfo } from "@/lib/api";
 import { useAuth } from "@/auth";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -37,6 +37,8 @@ export default function RolesPage() {
   const [description, setDescription] = useState("");
   const [permissions, setPermissions] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
+  const [accounts, setAccounts] = useState<AccountInfo[]>([]);
+  const [groups, setGroups] = useState<GroupInfo[]>([]);
 
   const load = () =>
     api.listRoles().then(setRoles).catch((err) => {
@@ -45,6 +47,16 @@ export default function RolesPage() {
     });
 
   useEffect(() => { load(); }, []);
+
+  useEffect(() => {
+    if (!user?.admin) return;
+    // Subject pickers: a failed account fetch just leaves an empty list, and
+    // RoleCard falls back to a raw-ID input.
+    api.listAccounts().then(setAccounts).catch(() => setAccounts([]));
+    api.listGroups()
+      .then((g) => setGroups(Object.values(g)))
+      .catch(() => setGroups([]));
+  }, [user?.admin]);
 
   const resetForm = () => {
     setName(""); setDisplayName(""); setDescription(""); setPermissions([]);
@@ -170,7 +182,8 @@ export default function RolesPage() {
       ) : (
         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
           {roles.map((role) => (
-            <RoleCard key={role.id} role={role} onEdit={openEdit} onDelete={onDelete} onChanged={load} />
+            <RoleCard key={role.id} role={role} onEdit={openEdit} onDelete={onDelete} onChanged={load}
+              accounts={accounts} groups={groups} />
           ))}
         </div>
       )}
@@ -178,11 +191,13 @@ export default function RolesPage() {
   );
 }
 
-function RoleCard({ role, onEdit, onDelete, onChanged }: {
+function RoleCard({ role, onEdit, onDelete, onChanged, accounts, groups }: {
   role: Role;
   onEdit: (r: Role) => void;
   onDelete: (id: number) => void;
   onChanged: () => void;
+  accounts: AccountInfo[];
+  groups: GroupInfo[];
 }) {
   const { t } = useTranslation("roles");
   const [bindings, setBindings] = useState<RoleBinding[] | null>(null);
@@ -190,6 +205,21 @@ function RoleCard({ role, onEdit, onDelete, onChanged }: {
   const [newSubjectType, setNewSubjectType] = useState<"account" | "group">("group");
   const [newSubjectID, setNewSubjectID] = useState("");
   const [newScope, setNewScope] = useState("*");
+
+  const subjectOptions = newSubjectType === "group"
+    ? groups.map((g) => ({ id: g.id, label: g.name }))
+    : accounts.map((a) => ({ id: String(a._account_id), label: `${a.username}${a.name ? ` — ${a.name}` : ""}` }));
+  const canPick = subjectOptions.length > 0;
+  const subjectLabel = (b: RoleBinding) => {
+    if (b.subject_type === "group") {
+      const g = groups.find((x) => x.id === String(b.subject_id));
+      if (g) return g.name;
+    } else {
+      const a = accounts.find((x) => x._account_id === b.subject_id);
+      if (a) return a.username;
+    }
+    return `#${b.subject_id}`;
+  };
 
   const loadBindings = () =>
     api.listRoleBindings(role.id).then(setBindings).catch(() => setBindings([]));
@@ -256,7 +286,7 @@ function RoleCard({ role, onEdit, onDelete, onChanged }: {
                 {bindings.map((b) => (
                   <div key={b.id} className="flex items-center gap-2 text-sm">
                     <Badge variant="outline" className="text-xs">{b.subject_type}</Badge>
-                    <span>#{b.subject_id}</span>
+                    <span>{subjectLabel(b)}</span>
                     <span className="text-muted-foreground">{t("scope")}: {b.scope}</span>
                     <button onClick={() => removeBinding(b.id)} className="ml-auto text-destructive hover:underline">
                       <Trash2 className="size-3" />
@@ -270,17 +300,30 @@ function RoleCard({ role, onEdit, onDelete, onChanged }: {
                 <Label className="text-xs">{t("subjectType")}</Label>
                 <select
                   value={newSubjectType}
-                  onChange={(e) => setNewSubjectType(e.target.value as "account" | "group")}
+                  onChange={(e) => { setNewSubjectType(e.target.value as "account" | "group"); setNewSubjectID(""); }}
                   className="rounded border bg-background px-2 py-1 text-sm"
                 >
                   <option value="group">{t("group")}</option>
                   <option value="account">{t("account")}</option>
                 </select>
               </div>
-              <div className="flex flex-col gap-1">
-                <Label className="text-xs">{t("subjectId")}</Label>
-                <Input value={newSubjectID} onChange={(e) => setNewSubjectID(e.target.value)}
-                  placeholder="ID" className="w-20" />
+              <div className="flex flex-1 flex-col gap-1">
+                <Label className="text-xs">{canPick ? t("subjectPick") : t("subjectId")}</Label>
+                {canPick ? (
+                  <select
+                    value={newSubjectID}
+                    onChange={(e) => setNewSubjectID(e.target.value)}
+                    className="w-full rounded border bg-background px-2 py-1 text-sm"
+                  >
+                    <option value="">{t("selectSubject")}</option>
+                    {subjectOptions.map((o) => (
+                      <option key={o.id} value={o.id}>{o.label}</option>
+                    ))}
+                  </select>
+                ) : (
+                  <Input value={newSubjectID} onChange={(e) => setNewSubjectID(e.target.value)}
+                    placeholder="ID" className="w-full" />
+                )}
               </div>
               <div className="flex flex-col gap-1">
                 <Label className="text-xs">{t("scope")}</Label>

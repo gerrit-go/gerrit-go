@@ -68,6 +68,7 @@ func (s *Server) handleCreateGroup(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	s.audit(acct, "group-create", "group", strconv.FormatInt(g.ID, 10), g.Name)
 	writeJSON(w, http.StatusCreated, groupInfo(g))
 }
 
@@ -111,6 +112,7 @@ func (s *Server) handleDeleteGroup(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	s.audit(acct, "group-delete", "group", strconv.FormatInt(g.ID, 10), g.Name)
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -161,6 +163,7 @@ func (s *Server) handleAddGroupMember(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	s.audit(acct, "group-member-add", "group", strconv.FormatInt(g.ID, 10), g.Name+" += "+target.Username)
 	writeJSON(w, http.StatusOK, map[string]any{
 		"_account_id": target.ID,
 		"username":    target.Username,
@@ -189,6 +192,7 @@ func (s *Server) handleDeleteGroupMember(w http.ResponseWriter, r *http.Request)
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	s.audit(acct, "group-member-remove", "group", strconv.FormatInt(g.ID, 10), g.Name+" -= "+target.Username)
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -262,6 +266,7 @@ func (s *Server) handleSetAccess(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	s.audit(acct, "access-set", "project", name, "rules="+strconv.Itoa(len(req.Rules)))
 	rules, _ := s.db.ListAccessRules(name)
 	writeJSON(w, http.StatusOK, map[string]any{
 		"local":    rules,

@@ -1,0 +1,17 @@
+export default {
+  title: "Audit Log",
+  adminOnly: "Admin access required",
+  empty: "No audit entries yet.",
+  allActions: "All actions",
+  modelDefaultDeny: "Permission model: default-deny",
+  modelLegacy: "Permission model: legacy permissive",
+  actorPlaceholder: "Actor",
+  total: "{{count}} entries",
+  prev: "Previous",
+  next: "Next",
+  "col.time": "Time",
+  "col.actor": "Actor",
+  "col.action": "Action",
+  "col.target": "Target",
+  "col.detail": "Detail",
+};

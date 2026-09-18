@@ -89,15 +89,22 @@ func TestCheckAccessAnonymousDenied(t *testing.T) {
 	s := permTestServer(db)
 	mustPermProject(t, db, "foo")
 
-	// Anonymous has global default read. Test a permission not covered by defaults.
-	acc := s.checkAccess(nil, "foo", "refs/heads/main", PermSubmit)
-	if acc.allowed {
+	// Default-deny: anonymous callers hold no grants unless a rule names
+	// the "Anonymous Users" group explicitly.
+	if s.checkAccess(nil, "foo", "refs/heads/main", PermSubmit).allowed {
 		t.Error("anonymous should not have submit access")
 	}
-	// But read is granted by the default Anonymous Users rule.
-	acc = s.checkAccess(nil, "foo", "refs/heads/main", PermRead)
-	if !acc.allowed {
-		t.Error("anonymous should have read via default rule")
+	if acc := s.checkAccess(nil, "foo", "refs/heads/main", PermRead); acc.allowed {
+		t.Error("anonymous should not have read under default-deny")
+	}
+	// An explicit rule restores it.
+	anon, err := db.GetGroupByName("Anonymous Users")
+	if err != nil {
+		t.Fatalf("anonymous group: %v", err)
+	}
+	mustAccessRule(t, db, "foo", "refs/heads/*", PermRead, anon.ID, "ALLOW", 0, 0)
+	if acc := s.checkAccess(nil, "foo", "refs/heads/main", PermRead); !acc.allowed {
+		t.Error("anonymous should have read via explicit rule")
 	}
 }
 
@@ -211,17 +218,24 @@ func TestCheckAccessNotMember(t *testing.T) {
 	}
 }
 
-func TestCheckAccessGlobalDefault(t *testing.T) {
+func TestCheckAccessDefaultDeny(t *testing.T) {
 	db := openPermTestDB(t)
 	s := permTestServer(db)
 	alice := mustPermAccount(t, db, "alice", false)
 	mustPermProject(t, db, "foo")
 
-	// The schema seeds a global default: Registered Users get refs/* read ALLOW.
-	// Alice is a signed-in user, so she's implicitly in Registered Users.
-	acc := s.checkAccess(alice, "foo", "refs/heads/main", PermRead)
-	if !acc.allowed {
-		t.Error("should inherit global default read access")
+	// Default-deny: a signed-in account with no rule and no binding sees nothing.
+	if s.checkAccess(alice, "foo", "refs/heads/main", PermRead).allowed {
+		t.Error("read must be denied without an explicit grant")
+	}
+	// An explicit global rule for Registered Users restores access.
+	reg, err := db.GetGroupByName("Registered Users")
+	if err != nil {
+		t.Fatalf("registered group: %v", err)
+	}
+	mustAccessRule(t, db, "*", "refs/*", PermRead, reg.ID, "ALLOW", 0, 0)
+	if !s.checkAccess(alice, "foo", "refs/heads/main", PermRead).allowed {
+		t.Error("should inherit explicit global read rule")
 	}
 }
 
@@ -462,8 +476,47 @@ func TestCanCapability(t *testing.T) {
 		t.Error("bob should not have editAccess capability")
 	}
 
-	// createProject is granted to Registered Users by default schema seed.
+	// Default-deny: createProject is no longer seeded to Registered Users.
+	if s.canCapability(bob, PermCreateProject) {
+		t.Error("bob should not have createProject without an explicit grant")
+	}
+	// A global-scope role binding restores it.
+	role := mustRole(t, db, "tf-lead", []string{"createProject"})
+	mustRoleBinding(t, db, role.ID, "account", bob.ID, "*")
 	if !s.canCapability(bob, PermCreateProject) {
-		t.Error("bob should have createProject via default Registered Users rule")
+		t.Error("bob should have createProject via global role binding")
+	}
+	// A namespace-scoped binding must not leak into global capabilities.
+	carol := mustPermAccount(t, db, "carol", false)
+	mustRoleBinding(t, db, role.ID, "account", carol.ID, "rk/*")
+	if s.canCapability(carol, PermCreateProject) {
+		t.Error("namespace binding should not grant a global capability")
+	}
+}
+
+// ---------- additive-grant tests ----------
+
+func TestRBACAdditiveWithLegacy(t *testing.T) {
+	db := openPermTestDB(t)
+	s := permTestServer(db)
+	alice := mustPermAccount(t, db, "alice", false)
+	mustPermProject(t, db, "foo")
+	devs := mustPermGroup(t, db, "developers")
+	mustGroupMember(t, db, devs.ID, alice.ID)
+
+	// Legacy grants read only.
+	mustAccessRule(t, db, "foo", "refs/heads/*", PermRead, devs.ID, "ALLOW", 0, 0)
+	// RBAC binding on the same namespace grants push.
+	role := mustRole(t, db, "dev", []string{"push"})
+	mustRoleBinding(t, db, role.ID, "account", alice.ID, "foo")
+
+	if !s.can(alice, "foo", "refs/heads/main", PermRead) {
+		t.Error("read should come from legacy rules")
+	}
+	if !s.can(alice, "foo", "refs/heads/main", PermPush) {
+		t.Error("push should come from the RBAC binding")
+	}
+	if s.can(alice, "foo", "refs/heads/main", PermSubmit) {
+		t.Error("submit is granted by neither source")
 	}
 }

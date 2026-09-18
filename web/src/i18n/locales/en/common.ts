@@ -6,6 +6,7 @@ export default {
     projects: "Projects",
     groups: "Groups",
     roles: "Roles",
+    audit: "Audit",
     menu: "Menu",
   },
   action: {

@@ -1,0 +1,23 @@
+{
+  "_comment": [
+    "Template for the NAS tenant binding migration (fill subjects/scopes with",
+    "real group names and namespaces, then run apply-tenant-bindings.sh).",
+    "Run AFTER the new image has booted once (default-deny migration executes at",
+    "startup), and AFTER taking a PostgreSQL backup: pg_dump via deploy/backup.sh.",
+    "Permissions refer to the RBAC engine: read, push, comment, submit, abandon,",
+    "editAccess, editTopicName, addReviewer, createProject, admin, plus labels",
+    "as label-Code-Review / label-Verified (see backend/internal/api/perm.go).",
+    "Scope '*' is global; 'ns/*' matches a namespace tree; 'label:key=value' matches labeled projects."
+  ],
+  "roles": [
+    { "name": "member-read", "display_name": "成员只读", "permissions": ["read", "comment"] },
+    { "name": "developer", "display_name": "开发者", "permissions": ["read", "comment", "push", "label-Code-Review", "label-Verified", "submit"] },
+    { "name": "tenant-admin", "display_name": "租户管理员", "permissions": ["read", "comment", "push", "submit", "abandon", "editAccess"] }
+  ],
+  "bindings": [
+    { "role": "member-read", "subject_type": "group", "subject": "Registered Users", "scope": "docs/*" },
+    { "role": "developer", "subject_type": "group", "subject": "<android-team-group>", "scope": "<android-namespace>/*" },
+    { "role": "developer", "subject_type": "group", "subject": "<bsp-team-group>", "scope": "rk3308_linux/*" },
+    { "role": "tenant-admin", "subject_type": "group", "subject": "<lead-group>", "scope": "<namespace>/*" }
+  ]
+}

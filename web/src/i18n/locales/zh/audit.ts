@@ -1,0 +1,17 @@
+export default {
+  title: "审计日志",
+  adminOnly: "仅管理员可访问",
+  empty: "暂无审计记录。",
+  allActions: "全部操作",
+  modelDefaultDeny: "权限模型：默认拒绝",
+  modelLegacy: "权限模型：旧版宽松",
+  actorPlaceholder: "操作者",
+  total: "共 {{count}} 条",
+  prev: "上一页",
+  next: "下一页",
+  "col.time": "时间",
+  "col.actor": "操作者",
+  "col.action": "操作",
+  "col.target": "对象",
+  "col.detail": "详情",
+};

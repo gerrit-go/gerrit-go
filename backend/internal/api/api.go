@@ -560,6 +560,7 @@ func (s *Server) handleCreateAccount(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusConflict, err.Error())
 		return
 	}
+	s.audit(actor, "account-create", "account", strconv.FormatInt(acct.ID, 10), acct.Username)
 	writeJSON(w, http.StatusCreated, accountInfo(acct))
 }
 
@@ -641,7 +642,16 @@ func (s *Server) gitMiddleware() http.Handler {
 			}
 			pusher = acct
 			remoteUser = acct.Username
-		} else if !s.canReadProject(s.optionalAccount(r), project) {
+		} else if acct := s.optionalAccount(r); !s.canReadProject(acct, project) {
+			// Git clients only send Basic credentials after a 401 challenge,
+			// so unauthenticated readers must be challenged rather than shown
+			// a 404; authenticated users without read access still get 404 to
+			// keep hidden projects invisible.
+			if acct == nil {
+				w.Header().Set("WWW-Authenticate", `Basic realm="gerrit-go"`)
+				http.Error(w, "authentication required", http.StatusUnauthorized)
+				return
+			}
 			http.Error(w, "repository not found", http.StatusNotFound)
 			return
 		}
@@ -734,14 +744,65 @@ func (s *Server) handleListNamespaces(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, tree)
 }
 
-// handleListLabels returns all distinct label keys and values.
+// handleListLabels returns label keys/values across the projects the caller can
+// read, so tenants never see labels applied to repositories they cannot reach.
 func (s *Server) handleListLabels(w http.ResponseWriter, r *http.Request) {
+	acct := s.optionalAccount(r)
 	labels, err := s.db.ListAllLabels()
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	if acct == nil || !acct.Admin {
+		all, err := s.db.ListProjects()
+		if err != nil {
+			writeErr(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		visible := make(map[string]bool, len(all))
+		for _, p := range all {
+			if s.canReadProject(acct, p.Name) {
+				visible[p.Name] = true
+			}
+		}
+		labels = filterLabelsByVisible(s.db, labels, visible)
+	}
 	writeJSON(w, http.StatusOK, labels)
+}
+
+// filterLabelsByVisible keeps only label keys/values that occur on visible
+// projects, so the /labels/ dropdown cannot leak hidden repositories.
+func filterLabelsByVisible(db *store.DB, labels map[string][]string, visible map[string]bool) map[string][]string {
+	if len(visible) == 0 {
+		return map[string][]string{}
+	}
+	seen := map[string]map[string]bool{}
+	for proj := range visible {
+		vals, err := db.GetProjectLabels(proj)
+		if err != nil {
+			continue
+		}
+		for key, v := range vals {
+			if _, ok := labels[key]; !ok {
+				continue
+			}
+			if seen[key] == nil {
+				seen[key] = map[string]bool{}
+			}
+			seen[key][v] = true
+		}
+	}
+	out := map[string][]string{}
+	for key, set := range seen {
+		values := make([]string, 0, len(set))
+		for v := range set {
+			values = append(values, v)
+		}
+		if len(values) > 0 {
+			out[key] = values
+		}
+	}
+	return out
 }
 
 // handleGetProjectLabels returns labels for a single project.
@@ -786,6 +847,7 @@ func (s *Server) handleSetProjectLabels(w http.ResponseWriter, r *http.Request) 
 			}
 		}
 	}
+	s.audit(acct, "labels-set", "project", name, fmt.Sprint(req))
 	labels, _ := s.db.GetProjectLabels(name)
 	writeJSON(w, http.StatusOK, labels)
 }
@@ -871,6 +933,7 @@ func (s *Server) handleCreateProject(w http.ResponseWriter, r *http.Request) {
 		}
 		s.seedProjectAccess(req.Name, acct)
 	}
+	s.audit(acct, "project-create", "project", req.Name, "parent="+req.Parent+" copy_from="+req.CopyFrom)
 	writeJSON(w, http.StatusCreated, map[string]any{"name": req.Name, "description": req.Description, "parent": req.Parent})
 }
 

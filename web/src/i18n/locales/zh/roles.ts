@@ -11,6 +11,8 @@ export default {
   noBindings: "暂无绑定",
   subjectType: "类型",
   subjectId: "ID",
+  subjectPick: "授权对象",
+  selectSubject: "— 请选择 —",
   scope: "作用域",
   group: "用户组",
   account: "用户",

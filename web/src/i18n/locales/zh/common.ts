@@ -6,6 +6,7 @@ export default {
     projects: "项目",
     groups: "用户组",
     roles: "角色",
+    audit: "审计",
     menu: "菜单",
   },
   action: {
