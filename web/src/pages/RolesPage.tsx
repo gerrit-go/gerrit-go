@@ -286,7 +286,7 @@ function RoleCard({ role, onEdit, onDelete, onChanged, accounts, groups }: {
                 {bindings.map((b) => (
                   <div key={b.id} className="flex items-center gap-2 text-sm">
                     <Badge variant="outline" className="text-xs">{b.subject_type}</Badge>
-                    <span>#{b.subject_id}</span>
+                    <span>{subjectLabel(b)}</span>
                     <span className="text-muted-foreground">{t("scope")}: {b.scope}</span>
                     <button onClick={() => removeBinding(b.id)} className="ml-auto text-destructive hover:underline">
                       <Trash2 className="size-3" />
