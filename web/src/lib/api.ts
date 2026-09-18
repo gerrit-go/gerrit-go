@@ -180,6 +180,23 @@ export interface NamespaceNode {
   children?: NamespaceNode[];
 }
 
+export interface Role {
+  id: number;
+  name: string;
+  display_name: string;
+  description: string;
+  permissions: string[];
+}
+
+export interface RoleBinding {
+  id: number;
+  role_id: number;
+  role_name?: string;
+  subject_type: "account" | "group";
+  subject_id: number;
+  scope: string;
+}
+
 export const SUBMIT_TYPES = [
   "FAST_FORWARD_ONLY",
   "REBASE_IF_NECESSARY",
@@ -486,6 +503,21 @@ export const api = {
     request<null>(`/groups/${encodeURIComponent(id)}/members/${encodeURIComponent(account)}`, {
       method: "DELETE",
     }),
+
+  // RBAC
+  listRoles: () => request<Role[]>("/roles/"),
+  getRole: (id: number) => request<Role>(`/roles/${id}`),
+  createRole: (body: { name: string; display_name?: string; description?: string; permissions: string[] }) =>
+    request<Role>("/roles/", { method: "POST", body: JSON.stringify(body) }),
+  updateRole: (id: number, body: { display_name?: string; description?: string; permissions: string[] }) =>
+    request<Role>(`/roles/${id}`, { method: "PUT", body: JSON.stringify(body) }),
+  deleteRole: (id: number) => request<null>(`/roles/${id}`, { method: "DELETE" }),
+  listRoleBindings: (roleId: number) => request<RoleBinding[]>(`/roles/${roleId}/bindings`),
+  createRoleBinding: (roleId: number, body: { subject_type: string; subject_id: number; scope?: string }) =>
+    request<RoleBinding>(`/roles/${roleId}/bindings`, { method: "POST", body: JSON.stringify(body) }),
+  deleteRoleBinding: (id: number) => request<null>(`/role-bindings/${id}`, { method: "DELETE" }),
+  effectivePermissions: (project?: string) =>
+    request<Record<string, unknown>>(`/accounts/self/permissions${project ? `?project=${encodeURIComponent(project)}` : ""}`),
 
   listChanges: (q = "") => request<ChangeInfo[]>(`/changes/?q=${encodeURIComponent(q)}`),
   listChangesPaged: async (

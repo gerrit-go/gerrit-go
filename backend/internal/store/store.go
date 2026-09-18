@@ -406,7 +406,25 @@ CREATE TABLE IF NOT EXISTS project_labels (
   value TEXT NOT NULL DEFAULT '',
   PRIMARY KEY (project, label)
 );
-CREATE INDEX IF NOT EXISTS idx_plabels_label ON project_labels(label, value);`
+CREATE INDEX IF NOT EXISTS idx_plabels_label ON project_labels(label, value);
+CREATE TABLE IF NOT EXISTS roles (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL UNIQUE,
+  display_name TEXT NOT NULL DEFAULT '',
+  description TEXT NOT NULL DEFAULT '',
+  permissions TEXT NOT NULL DEFAULT '[]',
+  created TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS role_bindings (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  role_id INTEGER NOT NULL REFERENCES roles(id) ON DELETE CASCADE,
+  subject_type TEXT NOT NULL,
+  subject_id INTEGER NOT NULL,
+  scope TEXT NOT NULL DEFAULT '*',
+  created TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_rb_subject ON role_bindings(subject_type, subject_id);
+CREATE INDEX IF NOT EXISTS idx_rb_role ON role_bindings(role_id);`
 
 func migrate(db *sql.DB, drv string) error {
 	schema := schemaSQLite
