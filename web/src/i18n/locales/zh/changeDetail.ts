@@ -98,6 +98,11 @@ export default {
     empty: "暂无上报的检查",
     remove: "移除检查项",
     report: "上报检查",
+    pipelines: "流水线运行",
+    refresh: "刷新流水线状态",
+    log: "日志",
+    logTitle: "{{name}} · 运行日志",
+    noLog: "（无日志输出）",
   },
   placeholder: {
     username: "用户名",

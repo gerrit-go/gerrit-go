@@ -60,7 +60,50 @@ func (s *Server) submitRequirementsMet(c *store.Change) (bool, string) {
 			return false, fmt.Sprintf("%s %+d required", req.Label, req.MinValue)
 		}
 	}
+	if msg := s.requiredPipelinesBlocked(c); msg != "" {
+		return false, msg
+	}
 	return true, ""
+}
+
+// requiredPipelinesBlocked reports a reason when a pipeline marked "required"
+// has no successful run on the change's current patch set. Empty means allowed.
+func (s *Server) requiredPipelinesBlocked(c *store.Change) string {
+	var needed []string
+	for _, scope := range []string{c.Project, "*"} {
+		configs, err := s.db.ListPipelineConfigs(scope)
+		if err != nil {
+			return ""
+		}
+		for _, cfg := range configs {
+			if cfg.Enabled && cfg.Required {
+				needed = append(needed, cfg.Name)
+			}
+		}
+	}
+	if len(needed) == 0 {
+		return ""
+	}
+	runs, err := s.db.ListPipelineRunsForPatchSet(c.Number, c.CurrentPS)
+	if err != nil {
+		return ""
+	}
+	passed := map[string]bool{}
+	for _, r := range runs {
+		if r.Status == store.RunSuccess {
+			passed[r.ConfigName] = true
+		}
+	}
+	var missing []string
+	for _, name := range needed {
+		if !passed[name] {
+			missing = append(missing, name)
+		}
+	}
+	if len(missing) == 0 {
+		return ""
+	}
+	return "pipeline required: " + strings.Join(missing, ", ")
 }
 
 // openAncestors returns open changes in the same project and branch whose commit

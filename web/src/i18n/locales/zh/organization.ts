@@ -28,4 +28,7 @@ export default {
   noBindings: "没有匹配的绑定。",
   manageBindings: "绑定与角色的增删改在",
   rolesPage: "角色管理页",
+  toastLabelApplied_other: "已为 {{count}} 个项目更新标签",
+  toastLabelRemoved: "标签已删除",
+  toastMoved: "项目已移动/改名为 {{name}}",
 };

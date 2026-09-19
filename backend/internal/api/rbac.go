@@ -40,20 +40,22 @@ func (s *Server) handleCreateRole(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		Name        string   `json:"name"`
-		DisplayName string   `json:"display_name"`
-		Description string   `json:"description"`
-		Permissions []string `json:"permissions"`
+		Name           string   `json:"name"`
+		DisplayName    string   `json:"display_name"`
+		Description    string   `json:"description"`
+		Permissions    []string `json:"permissions"`
+		TeamAssignable bool     `json:"team_assignable"`
 	}
 	if err := decodeJSON(r, &req); err != nil || req.Name == "" {
 		writeErr(w, http.StatusBadRequest, "name is required")
 		return
 	}
 	role := &store.Role{
-		Name:        req.Name,
-		DisplayName: req.DisplayName,
-		Description: req.Description,
-		Permissions: req.Permissions,
+		Name:           req.Name,
+		DisplayName:    req.DisplayName,
+		Description:    req.Description,
+		Permissions:    req.Permissions,
+		TeamAssignable: req.TeamAssignable,
 	}
 	if err := s.db.CreateRole(role); err != nil {
 		writeErr(w, http.StatusConflict, err.Error())
@@ -149,21 +151,18 @@ func (s *Server) handleListRoleBindings(w http.ResponseWriter, r *http.Request) 
 
 func (s *Server) handleCreateRoleBinding(w http.ResponseWriter, r *http.Request) {
 	acct := s.account(r)
-	if !acct.Admin {
-		s.forbid(w, r, "admin")
-		return
-	}
 	roleID, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
 	if err != nil {
 		writeErr(w, http.StatusBadRequest, "invalid role id")
 		return
 	}
-	if _, err := s.db.GetRole(roleID); err != nil {
+	role, err := s.db.GetRole(roleID)
+	if err != nil {
 		writeErr(w, http.StatusNotFound, "role not found")
 		return
 	}
 	var req struct {
-		SubjectType string `json:"subject_type"` // "account" | "group"
+		SubjectType string `json:"subject_type"` // "account" | "group" | "team"
 		SubjectID   int64  `json:"subject_id"`
 		Scope       string `json:"scope"`
 	}
@@ -171,12 +170,39 @@ func (s *Server) handleCreateRoleBinding(w http.ResponseWriter, r *http.Request)
 		writeErr(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-	if req.SubjectType != "account" && req.SubjectType != "group" {
-		writeErr(w, http.StatusBadRequest, "subject_type must be account or group")
+	if req.SubjectType != "account" && req.SubjectType != "group" && req.SubjectType != "team" {
+		writeErr(w, http.StatusBadRequest, "subject_type must be account, group or team")
 		return
 	}
 	if req.Scope == "" {
 		req.Scope = "*"
+	}
+	if req.SubjectType == "team" {
+		if _, err := s.db.GetTeam(req.SubjectID); err != nil {
+			writeErr(w, http.StatusNotFound, "team not found")
+			return
+		}
+	}
+	if !acct.Admin {
+		// Leader autonomy: a team leader may bind an admin-approved
+		// (team_assignable) role to their own team within a concrete scope.
+		if req.SubjectType != "team" {
+			s.forbid(w, r, "admin")
+			return
+		}
+		team, err := s.db.GetTeam(req.SubjectID)
+		if err != nil || team.LeaderID != acct.ID {
+			s.forbid(w, r, "team leadership")
+			return
+		}
+		if !role.TeamAssignable {
+			writeErr(w, http.StatusForbidden, "role is not team-assignable")
+			return
+		}
+		if req.Scope == "*" {
+			writeErr(w, http.StatusForbidden, "team leaders must bind to a concrete scope")
+			return
+		}
 	}
 	rb := &store.RoleBinding{
 		RoleID:      roleID,
@@ -195,14 +221,26 @@ func (s *Server) handleCreateRoleBinding(w http.ResponseWriter, r *http.Request)
 
 func (s *Server) handleDeleteRoleBinding(w http.ResponseWriter, r *http.Request) {
 	acct := s.account(r)
-	if !acct.Admin {
-		s.forbid(w, r, "admin")
-		return
-	}
 	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
 	if err != nil {
 		writeErr(w, http.StatusBadRequest, "invalid binding id")
 		return
+	}
+	if !acct.Admin {
+		rb, err := s.db.GetRoleBinding(id)
+		if err != nil {
+			writeErr(w, http.StatusNotFound, "binding not found")
+			return
+		}
+		if rb.SubjectType != "team" {
+			s.forbid(w, r, "admin")
+			return
+		}
+		team, err := s.db.GetTeam(rb.SubjectID)
+		if err != nil || team.LeaderID != acct.ID {
+			s.forbid(w, r, "team leadership")
+			return
+		}
 	}
 	if err := s.db.DeleteRoleBinding(id); err != nil {
 		writeErr(w, http.StatusInternalServerError, err.Error())

@@ -186,15 +186,69 @@ export interface Role {
   display_name: string;
   description: string;
   permissions: string[];
+  team_assignable?: boolean;
 }
 
 export interface RoleBinding {
   id: number;
   role_id: number;
   role_name?: string;
-  subject_type: "account" | "group";
+  subject_type: "account" | "group" | "team";
   subject_id: number;
   scope: string;
+}
+
+export interface Team {
+  id: number;
+  name: string;
+  display_name: string;
+  description: string;
+  leader_id: number;
+  leader_name?: string;
+  member_count: number;
+  scopes?: string[];
+  group_id?: number;
+  can_manage?: boolean;
+  created: string;
+}
+
+export interface PipelineConfig {
+  id: number;
+  project: string;
+  name: string;
+  triggers: string[];
+  steps: string[];
+  env?: Record<string, string>;
+  vote_label: string;
+  pass_vote: number;
+  fail_vote: number;
+  required: boolean;
+  enabled: boolean;
+  created: string;
+}
+
+export type PipelineConfigInput = Omit<PipelineConfig, "id" | "created">;
+
+export interface PipelineRun {
+  id: number;
+  config_id: number;
+  change_number: number;
+  patch_set: number;
+  project: string;
+  status: string; // QUEUED | RUNNING | SUCCESS | FAILURE | CANCELED | ERROR
+  runner: string;
+  log?: string;
+  started?: string;
+  finished?: string;
+  created: string;
+  config_name?: string;
+}
+
+export interface TeamMemberView {
+  account_id: number;
+  username?: string;
+  name?: string;
+  joined: string;
 }
 
 export interface AuditEntry {
@@ -427,6 +481,39 @@ export const api = {
       body: JSON.stringify({ projects, labels }),
     }),
   listAllRoleBindings: () => request<RoleBinding[]>("/role-bindings/"),
+
+  listTeams: () => request<Team[]>("/teams/"),
+  getTeam: (id: number) =>
+    request<{ team: Team; members: TeamMemberView[]; bindings: RoleBinding[] }>(`/teams/${id}`),
+  createTeam: (body: { name: string; display_name?: string; description?: string; leader?: string }) =>
+    request<Team>("/teams/", { method: "POST", body: JSON.stringify(body) }),
+  updateTeam: (id: number, body: { name?: string; display_name?: string; description?: string; leader?: string }) =>
+    request<Team>(`/teams/${id}`, { method: "PUT", body: JSON.stringify(body) }),
+  deleteTeam: (id: number) => request<null>(`/teams/${id}`, { method: "DELETE" }),
+  addTeamMember: (id: number, account: string) =>
+    request<{ account_id: number; username: string }>(`/teams/${id}/members/${encodeURIComponent(account)}`, { method: "PUT" }),
+  removeTeamMember: (id: number, account: string) =>
+    request<null>(`/teams/${id}/members/${encodeURIComponent(account)}`, { method: "DELETE" }),
+  teamAccountCandidates: (id: number, q: string) =>
+    request<AccountInfo[]>(`/teams/${id}/candidates?q=${encodeURIComponent(q)}`),
+
+  // CI pipelines
+  listPipelines: (project?: string) =>
+    request<PipelineConfig[]>(`/pipelines/${project ? `?project=${encodeURIComponent(project)}` : ""}`),
+  createPipeline: (body: PipelineConfigInput) =>
+    request<PipelineConfig>("/pipelines/", { method: "POST", body: JSON.stringify(body) }),
+  updatePipeline: (id: number, body: PipelineConfigInput) =>
+    request<PipelineConfig>(`/pipelines/${id}`, { method: "PUT", body: JSON.stringify(body) }),
+  deletePipeline: (id: number) => request<null>(`/pipelines/${id}`, { method: "DELETE" }),
+  listPipelineRuns: (id: number) => request<PipelineRun[]>(`/pipelines/${id}/runs`),
+  getPipelineRun: (id: number) => request<PipelineRun>(`/pipeline-runs/${id}`),
+  triggerPipeline: (id: number, changeNumber: number) =>
+    request<{ status: string }>(`/pipelines/${id}/trigger`, {
+      method: "POST",
+      body: JSON.stringify({ change_number: changeNumber }),
+    }),
+  listChangePipelines: (num: number | string) =>
+    request<PipelineRun[]>(`/changes/${num}/pipelines`),
   branches: (project: string) =>
     request<BranchInfo[]>(`/projects/${encodeURIComponent(project)}/branches`),
   commits: (project: string, revision?: string, n = 50) =>
@@ -535,9 +622,9 @@ export const api = {
   // RBAC
   listRoles: () => request<Role[]>("/roles/"),
   getRole: (id: number) => request<Role>(`/roles/${id}`),
-  createRole: (body: { name: string; display_name?: string; description?: string; permissions: string[] }) =>
+  createRole: (body: { name: string; display_name?: string; description?: string; permissions: string[]; team_assignable?: boolean }) =>
     request<Role>("/roles/", { method: "POST", body: JSON.stringify(body) }),
-  updateRole: (id: number, body: { display_name?: string; description?: string; permissions: string[] }) =>
+  updateRole: (id: number, body: { display_name?: string; description?: string; permissions: string[]; team_assignable?: boolean }) =>
     request<Role>(`/roles/${id}`, { method: "PUT", body: JSON.stringify(body) }),
   deleteRole: (id: number) => request<null>(`/roles/${id}`, { method: "DELETE" }),
   listRoleBindings: (roleId: number) => request<RoleBinding[]>(`/roles/${roleId}/bindings`),

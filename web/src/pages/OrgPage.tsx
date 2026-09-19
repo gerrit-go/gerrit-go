@@ -15,6 +15,7 @@ import {
   type NamespaceNode,
   type ProjectInfo,
   type RoleBinding,
+  type Team,
 } from "@/lib/api";
 import { useAuth } from "@/auth";
 import { Button } from "@/components/ui/button";
@@ -31,6 +32,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Skeleton } from "@/components/ui/skeleton";
+import { useToast } from "@/components/ui/toast";
 
 export default function OrgPage() {
   const { user } = useAuth();
@@ -41,6 +43,7 @@ export default function OrgPage() {
   const [bindings, setBindings] = useState<RoleBinding[]>([]);
   const [accounts, setAccounts] = useState<AccountInfo[]>([]);
   const [groups, setGroups] = useState<GroupInfo[]>([]);
+  const [teams, setTeams] = useState<Team[]>([]);
   const [selectedNs, setSelectedNs] = useState("");
   const [checked, setChecked] = useState<Set<string>>(new Set());
   const [error, setError] = useState("");
@@ -58,6 +61,7 @@ export default function OrgPage() {
     api.listGroups()
       .then((g) => setGroups(Object.values(g)))
       .catch(() => {});
+    api.listTeams().then(setTeams).catch(() => {});
   }, [isAdmin]);
 
   useEffect(() => {
@@ -98,6 +102,9 @@ export default function OrgPage() {
     if (b.subject_type === "group") {
       const g = groups.find((x) => x.id === String(b.subject_id));
       if (g) return g.name;
+    } else if (b.subject_type === "team") {
+      const tm = teams.find((x) => x.id === b.subject_id);
+      if (tm) return tm.display_name || tm.name;
     } else {
       const a = accounts.find((x) => x._account_id === b.subject_id);
       if (a) return a.username;
@@ -316,6 +323,7 @@ function BulkLabelDialog({ open, onOpenChange, projects, allLabels, onDone, onEr
   onError: (msg: string) => void;
 }) {
   const { t } = useTranslation("organization");
+  const toast = useToast();
   const [key, setKey] = useState("");
   const [value, setValue] = useState("");
   const [removing, setRemoving] = useState(false);
@@ -328,12 +336,14 @@ function BulkLabelDialog({ open, onOpenChange, projects, allLabels, onDone, onEr
     try {
       const labels = removing ? { [key.trim()]: null } : { [key.trim()]: value };
       await api.bulkSetLabels(projects, labels);
+      toast(removing ? t("toastLabelRemoved") : t("toastLabelApplied", { count: projects.length }), "success");
       setKey("");
       setValue("");
       setRemoving(false);
       onDone();
     } catch (err) {
       onError((err as Error).message);
+      toast((err as Error).message, "error");
     } finally {
       setBusy(false);
     }
@@ -411,6 +421,7 @@ function MoveDialog({ open, onOpenChange, project, namespaces, onDone, onError }
   onError: (msg: string) => void;
 }) {
   const { t } = useTranslation("organization");
+  const toast = useToast();
   const currentNs = project.includes("/") ? project.slice(0, project.lastIndexOf("/")) : "";
   const baseName = project.includes("/") ? project.slice(project.lastIndexOf("/") + 1) : project;
   const [targetNs, setTargetNs] = useState(currentNs);
@@ -437,9 +448,11 @@ function MoveDialog({ open, onOpenChange, project, namespaces, onDone, onError }
     onError("");
     try {
       const res = await api.renameProject(project, newName);
+      toast(t("toastMoved", { name: res.name }), "success");
       onDone(res.name);
     } catch (err) {
       onError((err as Error).message);
+      toast((err as Error).message, "error");
     } finally {
       setBusy(false);
     }

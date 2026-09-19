@@ -6,6 +6,7 @@ import {
   type AccessRuleInfo,
   type GroupInfo,
   type ProjectAccess,
+  type Team,
 } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -19,6 +20,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Skeleton } from "@/components/ui/skeleton";
+import { useToast } from "@/components/ui/toast";
 
 const selectCls =
   "h-9 rounded-md border border-input bg-transparent px-2 text-sm shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50";
@@ -42,8 +44,10 @@ function isLabel(perm: string) {
 
 export default function ProjectAccessPanel({ project }: { project: string }) {
   const { t } = useTranslation("projectAccess");
+  const toast = useToast();
   const [data, setData] = useState<ProjectAccess | null>(null);
   const [groups, setGroups] = useState<GroupInfo[]>([]);
+  const [teams, setTeams] = useState<Team[]>([]);
   const [rules, setRules] = useState<AccessRuleInfo[]>([]);
   const [dirty, setDirty] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -66,6 +70,7 @@ export default function ProjectAccessPanel({ project }: { project: string }) {
         setGroups(Object.values(map ?? {}).sort((a, b) => a.name.localeCompare(b.name))),
       )
       .catch(() => setGroups([]));
+    api.listTeams().then(setTeams).catch(() => setTeams([]));
   }, [project]);
 
   const inherited = useMemo(
@@ -106,12 +111,31 @@ export default function ProjectAccessPanel({ project }: { project: string }) {
       setData(acc);
       setRules((acc.local ?? []).filter((r) => r.project !== "*"));
       setDirty(false);
+      toast(t("toastSaved"), "success");
     } catch (err) {
       setError((err as Error).message);
+      toast((err as Error).message, "error");
     } finally {
       setBusy(false);
     }
   };
+
+  const reset = () => {
+    if (dirty && !confirm(t("confirmDiscard"))) return;
+    setRules((data?.local ?? []).filter((r) => r.project !== "*"));
+    setDirty(false);
+    setError("");
+  };
+
+  useEffect(() => {
+    if (!dirty) return;
+    const handler = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+      e.returnValue = "";
+    };
+    window.addEventListener("beforeunload", handler);
+    return () => window.removeEventListener("beforeunload", handler);
+  }, [dirty]);
 
   if (!data) {
     return (
@@ -125,6 +149,15 @@ export default function ProjectAccessPanel({ project }: { project: string }) {
 
   const groupName = (id: number) => groups.find((g) => Number(g.id) === id)?.name ?? `#${id}`;
 
+  // Teams auto-sync a "team:<name>" mirror group; show them as such.
+  const groupDisplay = (name?: string) => {
+    if (!name) return "";
+    if (!name.startsWith("team:")) return name;
+    const tn = name.slice(5);
+    const team = teams.find((x) => x.name === tn);
+    return `${t("teamBadge")} · ${team?.display_name || tn}`;
+  };
+
   return (
     <div className="flex flex-col gap-6">
       {error && <p className="text-sm text-destructive">{error}</p>}
@@ -132,12 +165,18 @@ export default function ProjectAccessPanel({ project }: { project: string }) {
       <section className="flex flex-col gap-2">
         <div className="flex items-center gap-2">
           <h2 className="text-sm font-semibold">{t("projectRules")}</h2>
+          {dirty && <Badge variant="muted" className="text-xs">{t("unsaved")}</Badge>}
           {canEdit && (
             <div className="ml-auto flex items-center gap-2">
-              <Button size="sm" variant="outline" onClick={addRule}>
+              <Button size="sm" variant="outline" onClick={addRule} disabled={busy}>
                 <Plus className="size-4" />
                 {t("addRule")}
               </Button>
+              {dirty && (
+                <Button size="sm" variant="ghost" onClick={reset} disabled={busy}>
+                  {t("discard")}
+                </Button>
+              )}
               <Button size="sm" onClick={save} disabled={!dirty || busy}>
                 <Save className="size-4" />
                 {busy ? t("common:action.saving") : t("common:action.save")}
@@ -210,16 +249,16 @@ export default function ProjectAccessPanel({ project }: { project: string }) {
                           onChange={(e) => update(i, { group_id: Number(e.target.value) })}
                         >
                           {!groups.some((g) => Number(g.id) === r.group_id) && (
-                            <option value={r.group_id}>{r.group_name ?? `#${r.group_id}`}</option>
+                            <option value={r.group_id}>{groupDisplay(r.group_name) || `#${r.group_id}`}</option>
                           )}
                           {groups.map((g) => (
                             <option key={g.id} value={g.id}>
-                              {g.name}
+                              {groupDisplay(g.name)}
                             </option>
                           ))}
                         </select>
                       ) : (
-                        <span className="text-xs">{r.group_name ?? groupName(r.group_id)}</span>
+                        <span className="text-xs">{groupDisplay(r.group_name) || groupName(r.group_id)}</span>
                       )}
                     </TableCell>
                     <TableCell>
@@ -306,7 +345,7 @@ export default function ProjectAccessPanel({ project }: { project: string }) {
                   <TableRow key={i}>
                     <TableCell className="font-mono text-xs">{r.ref_pattern}</TableCell>
                     <TableCell className="text-xs">{r.permission}</TableCell>
-                    <TableCell className="text-xs">{r.group_name}</TableCell>
+                    <TableCell className="text-xs">{groupDisplay(r.group_name)}</TableCell>
                     <TableCell>
                       <Badge
                         variant={r.action === "ALLOW" ? "secondary" : "destructive"}

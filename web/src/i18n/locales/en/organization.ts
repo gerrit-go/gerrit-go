@@ -30,4 +30,8 @@ export default {
   noBindings: "No matching bindings.",
   manageBindings: "Create and edit bindings on the",
   rolesPage: "Roles page",
+  toastLabelApplied_one: "Updated labels on {{count}} project",
+  toastLabelApplied_other: "Updated labels on {{count}} projects",
+  toastLabelRemoved: "Label removed",
+  toastMoved: "Project moved/renamed to {{name}}",
 };

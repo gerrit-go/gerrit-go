@@ -8,6 +8,7 @@ export default {
     access: "Access",
     manage: "Manage",
     webhooks: "Webhooks",
+    pipelines: "Pipelines",
   },
   emptyRepo: "(empty repository)",
   backToFiles: "← back to files",

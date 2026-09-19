@@ -5,6 +5,7 @@ export default {
     changes: "Changes",
     projects: "Projects",
     groups: "Groups",
+    teams: "Teams",
     organization: "Organization",
     roles: "Roles",
     audit: "Audit",

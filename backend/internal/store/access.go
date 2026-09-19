@@ -677,13 +677,15 @@ func (d *DB) MarkAllNotificationsRead(accountID int64) error {
 // ---------- RBAC: roles and role bindings ----------
 
 // Role defines a named set of permissions that can be bound to users or groups.
+// TeamAssignable roles may additionally be bound to a team by that team's leader.
 type Role struct {
-	ID          int64    `json:"id"`
-	Name        string   `json:"name"`
-	DisplayName string   `json:"display_name"`
-	Description string   `json:"description"`
-	Permissions []string `json:"permissions"`
-	Created     time.Time `json:"created"`
+	ID             int64     `json:"id"`
+	Name           string    `json:"name"`
+	DisplayName    string    `json:"display_name"`
+	Description    string    `json:"description"`
+	Permissions    []string  `json:"permissions"`
+	TeamAssignable bool      `json:"team_assignable"`
+	Created        time.Time `json:"created"`
 }
 
 // RoleBinding assigns a role to a subject (account or group) within a scope.
@@ -693,7 +695,7 @@ type RoleBinding struct {
 	ID          int64     `json:"id"`
 	RoleID      int64     `json:"role_id"`
 	RoleName    string    `json:"role_name,omitempty"`
-	SubjectType string    `json:"subject_type"` // "account" | "group"
+	SubjectType string    `json:"subject_type"` // "account" | "group" | "team"
 	SubjectID   int64     `json:"subject_id"`
 	Scope       string    `json:"scope"`
 	Created     time.Time `json:"created"`
@@ -703,8 +705,8 @@ type RoleBinding struct {
 func (d *DB) CreateRole(r *Role) error {
 	perms, _ := json.Marshal(r.Permissions)
 	id, err := d.insertID(
-		`INSERT INTO roles(name, display_name, description, permissions, created) VALUES(?,?,?,?,?)`,
-		"id", r.Name, r.DisplayName, r.Description, string(perms), now())
+		`INSERT INTO roles(name, display_name, description, permissions, team_assignable, created) VALUES(?,?,?,?,?,?)`,
+		"id", r.Name, r.DisplayName, r.Description, string(perms), b2i(r.TeamAssignable), now())
 	if err != nil {
 		return err
 	}
@@ -715,8 +717,8 @@ func (d *DB) CreateRole(r *Role) error {
 // UpdateRole modifies an existing role.
 func (d *DB) UpdateRole(r *Role) error {
 	perms, _ := json.Marshal(r.Permissions)
-	_, err := d.db.Exec(`UPDATE roles SET display_name=?, description=?, permissions=? WHERE id=?`,
-		r.DisplayName, r.Description, string(perms), r.ID)
+	_, err := d.db.Exec(`UPDATE roles SET display_name=?, description=?, permissions=?, team_assignable=? WHERE id=?`,
+		r.DisplayName, r.Description, string(perms), b2i(r.TeamAssignable), r.ID)
 	return err
 }
 
@@ -726,19 +728,21 @@ func (d *DB) DeleteRole(id int64) error {
 	return err
 }
 
+const roleSelectCols = `id, name, display_name, description, permissions, team_assignable, created`
+
 // GetRole returns a role by ID.
 func (d *DB) GetRole(id int64) (*Role, error) {
-	return d.scanRole(d.db.QueryRow(`SELECT id, name, display_name, description, permissions, created FROM roles WHERE id=?`, id))
+	return d.scanRole(d.db.QueryRow(`SELECT `+roleSelectCols+` FROM roles WHERE id=?`, id))
 }
 
 // GetRoleByName returns a role by name.
 func (d *DB) GetRoleByName(name string) (*Role, error) {
-	return d.scanRole(d.db.QueryRow(`SELECT id, name, display_name, description, permissions, created FROM roles WHERE name=?`, name))
+	return d.scanRole(d.db.QueryRow(`SELECT `+roleSelectCols+` FROM roles WHERE name=?`, name))
 }
 
 // ListRoles returns all roles.
 func (d *DB) ListRoles() ([]*Role, error) {
-	rows, err := d.db.Query(`SELECT id, name, display_name, description, permissions, created FROM roles ORDER BY name`)
+	rows, err := d.db.Query(`SELECT ` + roleSelectCols + ` FROM roles ORDER BY name`)
 	if err != nil {
 		return nil, err
 	}
@@ -757,10 +761,12 @@ func (d *DB) ListRoles() ([]*Role, error) {
 func (d *DB) scanRole(row interface{ Scan(...any) error }) (*Role, error) {
 	r := &Role{}
 	var perms, created string
-	if err := row.Scan(&r.ID, &r.Name, &r.DisplayName, &r.Description, &perms, &created); err != nil {
+	var assignable int
+	if err := row.Scan(&r.ID, &r.Name, &r.DisplayName, &r.Description, &perms, &assignable, &created); err != nil {
 		return nil, err
 	}
 	json.Unmarshal([]byte(perms), &r.Permissions)
+	r.TeamAssignable = assignable != 0
 	r.Created = parseTime(created)
 	return r, nil
 }
@@ -781,6 +787,20 @@ func (d *DB) CreateRoleBinding(rb *RoleBinding) error {
 func (d *DB) DeleteRoleBinding(id int64) error {
 	_, err := d.db.Exec(`DELETE FROM role_bindings WHERE id=?`, id)
 	return err
+}
+
+// GetRoleBinding returns a single binding (with role name) by ID.
+func (d *DB) GetRoleBinding(id int64) (*RoleBinding, error) {
+	rb := &RoleBinding{}
+	var created string
+	err := d.db.QueryRow(`SELECT rb.id, rb.role_id, r.name, rb.subject_type, rb.subject_id, rb.scope, rb.created
+		FROM role_bindings rb JOIN roles r ON r.id = rb.role_id WHERE rb.id=?`, id).
+		Scan(&rb.ID, &rb.RoleID, &rb.RoleName, &rb.SubjectType, &rb.SubjectID, &rb.Scope, &created)
+	if err != nil {
+		return nil, err
+	}
+	rb.Created = parseTime(created)
+	return rb, nil
 }
 
 // ListRoleBindings returns bindings, optionally filtered by role or subject.
@@ -824,7 +844,8 @@ func (d *DB) ListRoleBindings(roleID int64, subjectType string, subjectID int64)
 }
 
 // RoleBindingsForAccount returns all role bindings applicable to an account:
-// direct account bindings plus bindings via group membership.
+// direct account bindings plus bindings via group membership and via team
+// membership.
 func (d *DB) RoleBindingsForAccount(accountID int64, groupIDs map[int64]bool) ([]*RoleBinding, error) {
 	// Direct account bindings.
 	direct, err := d.ListRoleBindings(0, "account", accountID)
@@ -839,6 +860,17 @@ func (d *DB) RoleBindingsForAccount(accountID int64, groupIDs map[int64]bool) ([
 			continue
 		}
 		out = append(out, gbs...)
+	}
+	// Team bindings.
+	teamIDs, err := d.TeamIDsForAccount(accountID)
+	if err == nil {
+		for tid := range teamIDs {
+			tbs, err := d.ListRoleBindings(0, "team", tid)
+			if err != nil {
+				continue
+			}
+			out = append(out, tbs...)
+		}
 	}
 	return out, nil
 }
@@ -891,10 +923,11 @@ func (d *DB) scopeMatchesDB(scope, project string) bool {
 
 // ScopeMatches checks whether a role binding scope covers the given project.
 // Supported forms:
-//   "*"              — matches everything
-//   "project/name"   — exact project match
-//   "prefix/*"       — namespace prefix match
-//   "label:k=v"      — label selector (requires project to have label k=v)
+//
+//	"*"              — matches everything
+//	"project/name"   — exact project match
+//	"prefix/*"       — namespace prefix match
+//	"label:k=v"      — label selector (requires project to have label k=v)
 func ScopeMatches(scope, project string) bool {
 	if scope == "" || scope == "*" {
 		return true

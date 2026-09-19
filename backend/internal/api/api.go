@@ -22,6 +22,7 @@ import (
 	"gerrit-go/internal/i18n"
 	"gerrit-go/internal/metrics"
 	"gerrit-go/internal/notify"
+	"gerrit-go/internal/pipeline"
 	"gerrit-go/internal/store"
 	"gerrit-go/internal/webhook"
 )
@@ -41,6 +42,7 @@ type Server struct {
 	sshListener   net.Listener
 	events        *events.Broker
 	backupState   *backupStatus
+	ci            *pipeline.Service
 }
 
 func NewRouter(db *store.DB, authSvc *auth.Service, gitSvc *gitsvc.Service, notifier *notify.Notifier, staticDir string, allowRegister bool) http.Handler {
@@ -68,6 +70,9 @@ func NewServer(db *store.DB, authSvc *auth.Service, gitSvc *gitsvc.Service, noti
 		events:        events.NewBroker(),
 		backupState:   &backupStatus{},
 	}
+	// CI defaults to the simulated runner: the whole pipeline path works without
+	// executing anything. -ci-exec opts into real shell execution.
+	s.ci = pipeline.NewService(db, pipeline.SimulatedRunner{}, nil)
 	gitSvc.OnChangeEvent = s.onGitChangeEvent
 	s.routes()
 	s.compatRoutes()
@@ -186,6 +191,27 @@ func (s *Server) routes() {
 	mux.HandleFunc("GET /role-bindings/", s.requireAuth(s.handleListAllRoleBindings))
 	mux.HandleFunc("DELETE /role-bindings/{id}", s.requireAuth(s.handleDeleteRoleBinding))
 	mux.HandleFunc("GET /accounts/self/permissions", s.requireAuth(s.handleEffectivePermissions))
+
+	// Teams: admin manages all, members see their own.
+	mux.HandleFunc("GET /teams/", s.requireAuth(s.handleListTeams))
+	mux.HandleFunc("POST /teams/", s.requireAuth(s.handleCreateTeam))
+	mux.HandleFunc("GET /teams/{id}", s.requireAuth(s.handleGetTeam))
+	mux.HandleFunc("GET /teams/{id}/candidates", s.requireAuth(s.handleTeamAccountCandidates))
+	mux.HandleFunc("PUT /teams/{id}", s.requireAuth(s.handleUpdateTeam))
+	mux.HandleFunc("DELETE /teams/{id}", s.requireAuth(s.handleDeleteTeam))
+	mux.HandleFunc("PUT /teams/{id}/members/{account}", s.requireAuth(s.handleAddTeamMember))
+	mux.HandleFunc("DELETE /teams/{id}/members/{account}", s.requireAuth(s.handleRemoveTeamMember))
+
+	// CI pipelines.
+	mux.HandleFunc("GET /pipelines/", s.requireAuth(s.handleListPipelines))
+	mux.HandleFunc("POST /pipelines/", s.requireAuth(s.handleCreatePipeline))
+	mux.HandleFunc("GET /pipeline-runs/{id}", s.requireAuth(s.handleGetPipelineRun))
+	mux.HandleFunc("GET /pipelines/{id}", s.requireAuth(s.handleGetPipeline))
+	mux.HandleFunc("PUT /pipelines/{id}", s.requireAuth(s.handleUpdatePipeline))
+	mux.HandleFunc("DELETE /pipelines/{id}", s.requireAuth(s.handleDeletePipeline))
+	mux.HandleFunc("GET /pipelines/{id}/runs", s.requireAuth(s.handleListPipelineRuns))
+	mux.HandleFunc("POST /pipelines/{id}/trigger", s.requireAuth(s.handleTriggerPipeline))
+	mux.HandleFunc("GET /changes/{num}/pipelines", s.requireAuth(s.handleListChangePipelines))
 
 	// Changes.
 	mux.HandleFunc("GET /changes/", s.handleListChanges)
