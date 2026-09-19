@@ -81,6 +81,28 @@ func writeHead(dir, branch string) error {
 	return os.WriteFile(filepath.Join(dir, "HEAD"), []byte("ref: refs/heads/"+branch+"\n"), 0o644)
 }
 
+// MoveRepo renames the on-disk bare repository from oldName to newName. It only
+// touches the filesystem; the caller must update the database (store.RenameProject)
+// and may call MoveRepo again in reverse to roll back.
+func (s *Service) MoveRepo(oldName, newName string) error {
+	if oldName == "" || newName == "" ||
+		strings.Contains(oldName, "..") || strings.Contains(newName, "..") ||
+		strings.HasPrefix(oldName, "/") || strings.HasPrefix(newName, "/") {
+		return errors.New("invalid project name")
+	}
+	oldDir, newDir := s.RepoDir(oldName), s.RepoDir(newName)
+	if _, err := os.Stat(oldDir); err != nil {
+		return ErrProjectMissing
+	}
+	if _, err := os.Stat(newDir); err == nil {
+		return ErrProjectExists
+	}
+	if err := os.MkdirAll(filepath.Dir(newDir), 0o755); err != nil {
+		return err
+	}
+	return os.Rename(oldDir, newDir)
+}
+
 func (s *Service) OpenRepo(project string) (*git.Repository, error) {
 	if _, err := s.db.GetProject(project); err != nil {
 		return nil, ErrProjectMissing

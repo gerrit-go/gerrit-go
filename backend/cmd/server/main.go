@@ -49,6 +49,8 @@ func main() {
 	ldapNameAttr := flag.String("ldap-name-attr", "cn", "display-name attribute")
 	ldapInsecure := flag.Bool("ldap-insecure", false, "skip LDAP TLS certificate verification (ldaps)")
 	allowRegistration := flag.Bool("allow-registration", false, "allow open self-registration via /register (default off; admins can always create accounts)")
+	ciExec := flag.Bool("ci-exec", false, "let CI pipelines execute their steps as shell commands on this host (UNSAFE with untrusted repos; default is a simulated runner)")
+	ciStepTimeout := flag.Duration("ci-step-timeout", 10*time.Minute, "timeout for a single CI pipeline step when -ci-exec is set")
 	flag.Parse()
 
 	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo})))
@@ -133,6 +135,11 @@ func main() {
 		slog.Info("email notifications disabled; in-app notifications active")
 	}
 	srv := api.NewServer(db, authSvc, gitSvc, notifier, *staticDir, *allowRegistration)
+	if *ciExec {
+		srv.EnableCIExec(*ciStepTimeout)
+	} else {
+		slog.Info("ci: simulated runner active; pipelines do not execute commands (enable with -ci-exec)")
+	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()

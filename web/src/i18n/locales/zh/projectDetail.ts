@@ -8,6 +8,7 @@ export default {
     access: "访问控制",
     manage: "管理",
     webhooks: "Webhook",
+    pipelines: "流水线",
   },
   emptyRepo: "（空仓库）",
   backToFiles: "← 返回文件列表",

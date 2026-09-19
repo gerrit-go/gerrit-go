@@ -426,6 +426,52 @@ CREATE TABLE IF NOT EXISTS role_bindings (
 );
 CREATE INDEX IF NOT EXISTS idx_rb_subject ON role_bindings(subject_type, subject_id);
 CREATE INDEX IF NOT EXISTS idx_rb_role ON role_bindings(role_id);
+CREATE TABLE IF NOT EXISTS teams (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL UNIQUE,
+  display_name TEXT NOT NULL DEFAULT '',
+  description TEXT NOT NULL DEFAULT '',
+  leader_id INTEGER NOT NULL DEFAULT 0,
+  created TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS team_members (
+  team_id INTEGER NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
+  account_id INTEGER NOT NULL,
+  joined TEXT NOT NULL,
+  PRIMARY KEY (team_id, account_id)
+);
+CREATE INDEX IF NOT EXISTS idx_tm_account ON team_members(account_id);
+CREATE TABLE IF NOT EXISTS pipeline_configs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  project TEXT NOT NULL,
+  name TEXT NOT NULL,
+  triggers TEXT NOT NULL DEFAULT '["patchset-created"]',
+  steps TEXT NOT NULL DEFAULT '[]',
+  env TEXT NOT NULL DEFAULT '{}',
+  vote_label TEXT NOT NULL DEFAULT '',
+  pass_vote INTEGER NOT NULL DEFAULT 1,
+  fail_vote INTEGER NOT NULL DEFAULT -1,
+  required INTEGER NOT NULL DEFAULT 0,
+  enabled INTEGER NOT NULL DEFAULT 1,
+  created TEXT NOT NULL,
+  UNIQUE (project, name)
+);
+CREATE INDEX IF NOT EXISTS idx_pc_project ON pipeline_configs(project);
+CREATE TABLE IF NOT EXISTS pipeline_runs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  config_id INTEGER NOT NULL REFERENCES pipeline_configs(id) ON DELETE CASCADE,
+  change_number INTEGER NOT NULL,
+  patch_set INTEGER NOT NULL,
+  project TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL DEFAULT 'QUEUED',
+  runner TEXT NOT NULL DEFAULT '',
+  log TEXT NOT NULL DEFAULT '',
+  started TEXT NOT NULL DEFAULT '',
+  finished TEXT NOT NULL DEFAULT '',
+  created TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_pr_change ON pipeline_runs(change_number, patch_set);
+CREATE INDEX IF NOT EXISTS idx_pr_config ON pipeline_runs(config_id);
 CREATE TABLE IF NOT EXISTS app_meta (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL
@@ -494,6 +540,15 @@ func migrate(db *sql.DB, drv string) error {
 		if err := addColumnIfMissing(db, drv, "accounts", col.name, col.def); err != nil {
 			return err
 		}
+	}
+	if err := addColumnIfMissing(db, drv, "roles", "team_assignable", "team_assignable INTEGER NOT NULL DEFAULT 0"); err != nil {
+		return err
+	}
+	if err := addColumnIfMissing(db, drv, "teams", "group_id", "group_id INTEGER NOT NULL DEFAULT 0"); err != nil {
+		return err
+	}
+	if err := backfillTeamMirrors(db, drv); err != nil {
+		return err
 	}
 	if err := seedDefaults(db); err != nil {
 		return err

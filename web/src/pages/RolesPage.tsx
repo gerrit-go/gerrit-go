@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Plus, ShieldCheck, Trash2, Users } from "lucide-react";
-import { api, type Role, type RoleBinding, type AccountInfo, type GroupInfo } from "@/lib/api";
+import { api, type Role, type RoleBinding, type AccountInfo, type GroupInfo, type Team } from "@/lib/api";
 import { useAuth } from "@/auth";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -19,15 +19,19 @@ import {
   DialogTrigger,
 } from "@/components/ui/dialog";
 import { Skeleton } from "@/components/ui/skeleton";
+import { useToast } from "@/components/ui/toast";
 
 const KNOWN_PERMISSIONS = [
   "read", "push", "submit", "abandon", "comment",
   "editTopicName", "addReviewer", "createProject", "editAccess", "admin",
 ];
 
+const ROLE_NAME_RE = /^[A-Za-z0-9_.-]+$/;
+
 export default function RolesPage() {
   const { user } = useAuth();
   const { t } = useTranslation("roles");
+  const toast = useToast();
   const [roles, setRoles] = useState<Role[] | null>(null);
   const [error, setError] = useState("");
   const [open, setOpen] = useState(false);
@@ -36,9 +40,12 @@ export default function RolesPage() {
   const [displayName, setDisplayName] = useState("");
   const [description, setDescription] = useState("");
   const [permissions, setPermissions] = useState<string[]>([]);
+  const [assignable, setAssignable] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [nameTouched, setNameTouched] = useState(false);
   const [accounts, setAccounts] = useState<AccountInfo[]>([]);
   const [groups, setGroups] = useState<GroupInfo[]>([]);
+  const [teams, setTeams] = useState<Team[]>([]);
 
   const load = () =>
     api.listRoles().then(setRoles).catch((err) => {
@@ -56,10 +63,15 @@ export default function RolesPage() {
     api.listGroups()
       .then((g) => setGroups(Object.values(g)))
       .catch(() => setGroups([]));
+    api.listTeams().then(setTeams).catch(() => setTeams([]));
   }, [user?.admin]);
 
+  const nameInvalid = !editRole && !ROLE_NAME_RE.test(name.trim());
+  const showNameError = nameTouched && nameInvalid;
+
   const resetForm = () => {
-    setName(""); setDisplayName(""); setDescription(""); setPermissions([]);
+    setName(""); setDisplayName(""); setDescription(""); setPermissions([]); setAssignable(false);
+    setNameTouched(false);
     setEditRole(null);
   };
 
@@ -69,24 +81,34 @@ export default function RolesPage() {
     setDisplayName(role.display_name);
     setDescription(role.description);
     setPermissions(role.permissions || []);
+    setAssignable(!!role.team_assignable);
+    setNameTouched(false);
     setOpen(true);
   };
 
   const onSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!editRole && !ROLE_NAME_RE.test(name.trim())) {
+      setNameTouched(true);
+      setError(t("nameRule"));
+      return;
+    }
     setBusy(true);
     setError("");
     try {
       if (editRole) {
-        await api.updateRole(editRole.id, { display_name: displayName, description, permissions });
+        await api.updateRole(editRole.id, { display_name: displayName, description, permissions, team_assignable: assignable });
+        toast(t("toastSaved"), "success");
       } else {
-        await api.createRole({ name: name.trim(), display_name: displayName, description, permissions });
+        await api.createRole({ name: name.trim(), display_name: displayName, description, permissions, team_assignable: assignable });
+        toast(t("toastCreated"), "success");
       }
       setOpen(false);
       resetForm();
       await load();
     } catch (err) {
       setError((err as Error).message);
+      toast((err as Error).message, "error");
     } finally {
       setBusy(false);
     }
@@ -97,8 +119,10 @@ export default function RolesPage() {
     try {
       await api.deleteRole(id);
       await load();
+      toast(t("toastDeleted"), "success");
     } catch (err) {
       setError((err as Error).message);
+      toast((err as Error).message, "error");
     }
   };
 
@@ -133,7 +157,9 @@ export default function RolesPage() {
                 <div className="flex flex-col gap-2">
                   <Label htmlFor="role-name">{t("name")}</Label>
                   <Input id="role-name" value={name} onChange={(e) => setName(e.target.value)}
-                    placeholder="bsp-lead" required />
+                    onBlur={() => setNameTouched(true)}
+                    placeholder="bsp-lead" required aria-invalid={showNameError} />
+                  <p className={`text-xs ${showNameError ? "text-destructive" : "text-muted-foreground"}`}>{t("nameRule")}</p>
                 </div>
               )}
               <div className="flex flex-col gap-2">
@@ -160,9 +186,14 @@ export default function RolesPage() {
                   ))}
                 </div>
               </div>
+              <label className="flex cursor-pointer items-center gap-2 text-sm">
+                <input type="checkbox" checked={assignable} onChange={(e) => setAssignable(e.target.checked)} />
+                <span>{t("teamAssignable")}</span>
+                <span className="text-xs text-muted-foreground">— {t("teamAssignableHint")}</span>
+              </label>
               {error && <p className="text-sm text-destructive">{error}</p>}
               <DialogFooter>
-                <Button type="submit" disabled={busy}>
+                <Button type="submit" disabled={busy || nameInvalid}>
                   {busy ? t("common:action.saving") : editRole ? t("common:action.save") : t("common:action.create")}
                 </Button>
               </DialogFooter>
@@ -183,7 +214,7 @@ export default function RolesPage() {
         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
           {roles.map((role) => (
             <RoleCard key={role.id} role={role} onEdit={openEdit} onDelete={onDelete} onChanged={load}
-              accounts={accounts} groups={groups} />
+              accounts={accounts} groups={groups} teams={teams} />
           ))}
         </div>
       )}
@@ -191,29 +222,37 @@ export default function RolesPage() {
   );
 }
 
-function RoleCard({ role, onEdit, onDelete, onChanged, accounts, groups }: {
+function RoleCard({ role, onEdit, onDelete, onChanged, accounts, groups, teams }: {
   role: Role;
   onEdit: (r: Role) => void;
   onDelete: (id: number) => void;
   onChanged: () => void;
   accounts: AccountInfo[];
   groups: GroupInfo[];
+  teams: Team[];
 }) {
   const { t } = useTranslation("roles");
+  const toast = useToast();
   const [bindings, setBindings] = useState<RoleBinding[] | null>(null);
   const [showBindings, setShowBindings] = useState(false);
-  const [newSubjectType, setNewSubjectType] = useState<"account" | "group">("group");
+  const [bindBusy, setBindBusy] = useState(false);
+  const [newSubjectType, setNewSubjectType] = useState<"account" | "group" | "team">("group");
   const [newSubjectID, setNewSubjectID] = useState("");
   const [newScope, setNewScope] = useState("*");
 
   const subjectOptions = newSubjectType === "group"
     ? groups.map((g) => ({ id: g.id, label: g.name }))
-    : accounts.map((a) => ({ id: String(a._account_id), label: `${a.username}${a.name ? ` — ${a.name}` : ""}` }));
+    : newSubjectType === "team"
+      ? teams.map((tm) => ({ id: String(tm.id), label: tm.display_name || tm.name }))
+      : accounts.map((a) => ({ id: String(a._account_id), label: `${a.username}${a.name ? ` — ${a.name}` : ""}` }));
   const canPick = subjectOptions.length > 0;
   const subjectLabel = (b: RoleBinding) => {
     if (b.subject_type === "group") {
       const g = groups.find((x) => x.id === String(b.subject_id));
       if (g) return g.name;
+    } else if (b.subject_type === "team") {
+      const tm = teams.find((x) => x.id === b.subject_id);
+      if (tm) return tm.display_name || tm.name;
     } else {
       const a = accounts.find((x) => x._account_id === b.subject_id);
       if (a) return a.username;
@@ -230,22 +269,35 @@ function RoleCard({ role, onEdit, onDelete, onChanged, accounts, groups }: {
 
   const addBinding = async () => {
     const sid = parseInt(newSubjectID, 10);
-    if (!sid) return;
+    if (!sid || bindBusy) return;
+    setBindBusy(true);
     try {
       await api.createRoleBinding(role.id, { subject_type: newSubjectType, subject_id: sid, scope: newScope });
+      toast(t("toastBindingAdded"), "success");
       setNewSubjectID("");
       setNewScope("*");
       await loadBindings();
       onChanged();
-    } catch { /* ignore */ }
+    } catch (err) {
+      toast((err as Error).message, "error");
+    } finally {
+      setBindBusy(false);
+    }
   };
 
   const removeBinding = async (id: number) => {
+    if (bindBusy) return;
+    setBindBusy(true);
     try {
       await api.deleteRoleBinding(id);
+      toast(t("toastBindingRemoved"), "success");
       await loadBindings();
       onChanged();
-    } catch { /* ignore */ }
+    } catch (err) {
+      toast((err as Error).message, "error");
+    } finally {
+      setBindBusy(false);
+    }
   };
 
   return (
@@ -254,6 +306,7 @@ function RoleCard({ role, onEdit, onDelete, onChanged, accounts, groups }: {
         <CardTitle className="flex items-center gap-2 text-base">
           <ShieldCheck className="size-4 shrink-0 text-muted-foreground" />
           <span className="min-w-0 truncate">{role.display_name || role.name}</span>
+          {role.team_assignable && <Badge variant="outline" className="shrink-0 text-xs">{t("teamAssignable")}</Badge>}
           <code className="ml-auto text-xs text-muted-foreground">{role.name}</code>
         </CardTitle>
         <CardDescription className="line-clamp-2">{role.description || t("noDescription")}</CardDescription>
@@ -288,7 +341,7 @@ function RoleCard({ role, onEdit, onDelete, onChanged, accounts, groups }: {
                     <Badge variant="outline" className="text-xs">{b.subject_type}</Badge>
                     <span>{subjectLabel(b)}</span>
                     <span className="text-muted-foreground">{t("scope")}: {b.scope}</span>
-                    <button onClick={() => removeBinding(b.id)} className="ml-auto text-destructive hover:underline">
+                    <button onClick={() => removeBinding(b.id)} disabled={bindBusy} className="ml-auto text-destructive hover:underline disabled:opacity-50">
                       <Trash2 className="size-3" />
                     </button>
                   </div>
@@ -300,10 +353,11 @@ function RoleCard({ role, onEdit, onDelete, onChanged, accounts, groups }: {
                 <Label className="text-xs">{t("subjectType")}</Label>
                 <select
                   value={newSubjectType}
-                  onChange={(e) => { setNewSubjectType(e.target.value as "account" | "group"); setNewSubjectID(""); }}
+                  onChange={(e) => { setNewSubjectType(e.target.value as "account" | "group" | "team"); setNewSubjectID(""); }}
                   className="rounded border bg-background px-2 py-1 text-sm"
                 >
                   <option value="group">{t("group")}</option>
+                  <option value="team">{t("team")}</option>
                   <option value="account">{t("account")}</option>
                 </select>
               </div>
@@ -330,7 +384,7 @@ function RoleCard({ role, onEdit, onDelete, onChanged, accounts, groups }: {
                 <Input value={newScope} onChange={(e) => setNewScope(e.target.value)}
                   placeholder="*" className="w-32" />
               </div>
-              <Button size="sm" onClick={addBinding} disabled={!newSubjectID}>{t("add")}</Button>
+              <Button size="sm" onClick={addBinding} disabled={!newSubjectID || bindBusy}>{bindBusy ? t("common:action.saving") : t("add")}</Button>
             </div>
           </div>
         )}

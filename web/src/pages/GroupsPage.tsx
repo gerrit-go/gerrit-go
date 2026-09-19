@@ -25,10 +25,12 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Skeleton } from "@/components/ui/skeleton";
+import { useToast } from "@/components/ui/toast";
 
 export default function GroupsPage() {
   const { user } = useAuth();
   const { t } = useTranslation("groups");
+  const toast = useToast();
   const isAdmin = !!user?.admin;
   const [groups, setGroups] = useState<GroupInfo[] | null>(null);
   const [error, setError] = useState("");
@@ -63,20 +65,28 @@ export default function GroupsPage() {
       setName("");
       setDescription("");
       await load();
+      toast(t("toastGroupCreated"), "success");
     } catch (err) {
       setError((err as Error).message);
+      toast((err as Error).message, "error");
     } finally {
       setBusy(false);
     }
   };
 
   const onDelete = async (g: GroupInfo) => {
-    if (!confirm(t("deleteConfirm", { name: g.name }))) return;
+    if (busy || !confirm(t("deleteConfirm", { name: g.name }))) return;
+    setBusy(true);
+    setError("");
     try {
       await api.deleteGroup(g.id);
       await load();
+      toast(t("toastGroupDeleted"), "success");
     } catch (err) {
       setError((err as Error).message);
+      toast((err as Error).message, "error");
+    } finally {
+      setBusy(false);
     }
   };
 
@@ -218,9 +228,11 @@ function MembersDialog({
   canEdit: boolean;
 }) {
   const { t } = useTranslation("groups");
+  const toast = useToast();
   const [members, setMembers] = useState<GroupMember[]>([]);
   const [account, setAccount] = useState("");
   const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
 
   const load = (g: GroupInfo) =>
     api
@@ -239,24 +251,35 @@ function MembersDialog({
 
   const add = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!group) return;
+    if (!group || busy) return;
+    setBusy(true);
     setError("");
     try {
       await api.addGroupMember(group.id, account.trim());
+      toast(t("toastMemberAdded", { name: account.trim() }), "success");
       setAccount("");
       await load(group);
     } catch (err) {
       setError((err as Error).message);
+      toast((err as Error).message, "error");
+    } finally {
+      setBusy(false);
     }
   };
 
   const remove = async (m: GroupMember) => {
-    if (!group) return;
+    if (!group || busy) return;
+    setBusy(true);
+    setError("");
     try {
       await api.removeGroupMember(group.id, m.username);
+      toast(t("toastMemberRemoved", { name: m.username }), "success");
       await load(group);
     } catch (err) {
       setError((err as Error).message);
+      toast((err as Error).message, "error");
+    } finally {
+      setBusy(false);
     }
   };
 
@@ -280,9 +303,9 @@ function MembersDialog({
                 placeholder={t("memberPlaceholder")}
               />
             </div>
-            <Button type="submit" disabled={!account.trim()}>
+            <Button type="submit" disabled={!account.trim() || busy}>
               <Plus className="size-4" />
-              {t("common:action.add")}
+              {busy ? t("common:action.saving") : t("common:action.add")}
             </Button>
           </form>
         )}
@@ -305,6 +328,7 @@ function MembersDialog({
                           variant="ghost"
                           size="icon"
                           onClick={() => remove(m)}
+                          disabled={busy}
                           aria-label={t("removeMemberAria", { name: m.username })}
                         >
                           <X className="size-4" />

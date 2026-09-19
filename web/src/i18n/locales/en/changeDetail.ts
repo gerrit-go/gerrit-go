@@ -98,6 +98,11 @@ export default {
     empty: "No checks reported",
     remove: "Remove check",
     report: "Report check",
+    pipelines: "Pipeline runs",
+    refresh: "Refresh pipeline status",
+    log: "Log",
+    logTitle: "{{name}} · run log",
+    noLog: "(no log output)",
   },
   placeholder: {
     username: "username",

@@ -8,6 +8,8 @@ import {
   Check,
   ChevronDown,
   CircleCheck,
+  RefreshCw,
+  ScrollText,
   CircleDot,
   CircleX,
   ClipboardCheck,
@@ -47,6 +49,7 @@ import {
   type DiffLine,
   type EditInfo,
   type FileDiff,
+  type PipelineRun,
 } from "@/lib/api";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "@/auth";
@@ -100,6 +103,7 @@ export default function ChangeDetailPage() {
   const [downloadOpen, setDownloadOpen] = useState(false);
   const [sshPort, setSshPort] = useState("");
   const [fileIdx, setFileIdx] = useState(-1);
+  const [applyingSuggestion, setApplyingSuggestion] = useState(false);
 
   useHotkey((e) => {
     const count = files?.length ?? 0;
@@ -195,7 +199,6 @@ export default function ChangeDetailPage() {
     }
   };
 
-  const [applyingSuggestion, setApplyingSuggestion] = useState(false);
   const applySuggestion = async (comment: CommentInfo, suggestion: string) => {
     if (!change || change.status !== "NEW") return;
     setApplyingSuggestion(true);
@@ -1359,9 +1362,27 @@ function checkStateIcon(state: string) {
   }
 }
 
+function runStateToCheck(status: string) {
+  switch (status) {
+    case "SUCCESS":
+      return "SUCCESSFUL";
+    case "FAILURE":
+    case "ERROR":
+      return "FAILED";
+    case "RUNNING":
+    case "QUEUED":
+      return "RUNNING";
+    default:
+      return "NOT_STARTED";
+  }
+}
+
 function ChecksCard({ change, canEdit }: { change: ChangeInfo; canEdit: boolean }) {
   const { t } = useTranslation("changeDetail");
   const [runs, setRuns] = useState<CheckRun[]>([]);
+  const [pipelines, setPipelines] = useState<PipelineRun[]>([]);
+  const [logFor, setLogFor] = useState<PipelineRun | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
   const [loaded, setLoaded] = useState(false);
   const [name, setName] = useState("");
   const [state, setState] = useState("SUCCESSFUL");
@@ -1375,9 +1396,28 @@ function ChecksCard({ change, canEdit }: { change: ChangeInfo; canEdit: boolean 
       .then((r) => setRuns(r ?? []))
       .catch(() => setRuns([]))
       .finally(() => setLoaded(true));
+    api
+      .listChangePipelines(change._number)
+      .then((p) => setPipelines(p ?? []))
+      .catch(() => setPipelines([]));
   }, [change._number]);
 
   useEffect(loadRuns, [loadRuns]);
+
+  const openLog = async (run: PipelineRun) => {
+    setErr("");
+    try {
+      setLogFor(await api.getPipelineRun(run.id));
+    } catch (e) {
+      setErr((e as Error).message);
+    }
+  };
+
+  const refresh = async () => {
+    setRefreshing(true);
+    loadRuns();
+    setTimeout(() => setRefreshing(false), 500);
+  };
 
   const save = async () => {
     const n = name.trim();
@@ -1457,6 +1497,55 @@ function ChecksCard({ change, canEdit }: { change: ChangeInfo; canEdit: boolean 
               </li>
             ))}
           </ul>
+        )}
+        {pipelines.length > 0 && (
+          <div className="flex flex-col gap-1.5 border-t pt-2">
+            <div className="flex items-center gap-2">
+              <span className="text-xs font-medium text-muted-foreground">{t("checks.pipelines")}</span>
+              <button
+                type="button"
+                className="ml-auto text-muted-foreground hover:text-foreground disabled:opacity-50"
+                title={t("checks.refresh")}
+                aria-label={t("checks.refresh")}
+                disabled={refreshing}
+                onClick={refresh}
+              >
+                <RefreshCw className={`size-3.5 ${refreshing ? "animate-spin" : ""}`} />
+              </button>
+            </div>
+            {pipelines.map((p) => (
+              <div key={p.id} className="flex items-center gap-2 text-sm">
+                {checkStateIcon(runStateToCheck(p.status))}
+                <span className="font-medium">{p.config_name || `pipeline#${p.config_id}`}</span>
+                <span className="text-xs text-muted-foreground">{p.status}</span>
+                {!!p.runner && <span className="text-xs text-muted-foreground">{p.runner}</span>}
+                <button
+                  className="ml-auto flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
+                  onClick={() => openLog(p)}
+                >
+                  <ScrollText className="size-3.5" />
+                  {t("checks.log")}
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+        {logFor && (
+          <Dialog open onOpenChange={(v) => { if (!v) setLogFor(null); }}>
+            <DialogContent className="max-w-3xl">
+              <DialogHeader>
+                <DialogTitle className="text-base">
+                  {t("checks.logTitle", { name: logFor.config_name || `#${logFor.config_id}` })}
+                </DialogTitle>
+                <DialogDescription className="text-xs">
+                  {logFor.status} · {logFor.runner} · #{logFor.change_number}/{logFor.patch_set}
+                </DialogDescription>
+              </DialogHeader>
+              <pre className="max-h-[60vh] overflow-auto rounded bg-muted p-3 font-mono text-xs whitespace-pre-wrap">
+                {logFor.log || t("checks.noLog")}
+              </pre>
+            </DialogContent>
+          </Dialog>
         )}
         {canEdit && (
           <div className="flex flex-col gap-1.5 border-t pt-2">

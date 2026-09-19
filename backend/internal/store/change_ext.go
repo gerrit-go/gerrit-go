@@ -166,3 +166,98 @@ func (d *DB) DeleteProject(name string) error {
 	d.perm.invalidateRules()
 	return nil
 }
+
+// projectRefTables lists every table holding a project reference by NAME.
+var projectRefTables = []string{
+	"access_rules", "changes", "project_labels", "submit_requirements",
+	"watched_projects", "webhooks",
+}
+
+// RenameProject rewrites a project's name and every reference to it (child
+// tables, parent self-reference, exact/prefix role-binding scopes and the
+// derived "<project> Owners" group) in one transaction. The caller is
+// responsible for moving the on-disk repository via gitsvc and for rolling it
+// back if this returns an error.
+func (d *DB) RenameProject(oldName, newName string) error {
+	if oldName == newName || oldName == "" || newName == "" {
+		return sql.ErrNoRows
+	}
+	tx, err := d.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	type foreignKey struct {
+		table, name, def string
+	}
+	var fks []foreignKey
+	if d.driver == DriverPostgres {
+		// The FKs onto projects(name) are not deferrable, so drop them for the
+		// duration of the rename and re-add (re-validating) before commit.
+		rows, err := tx.Query(`SELECT conrelid::regclass, conname, pg_get_constraintdef(oid)
+			FROM pg_constraint WHERE contype='f' AND confrelid='projects'::regclass`)
+		if err != nil {
+			return err
+		}
+		for rows.Next() {
+			var fk foreignKey
+			if err := rows.Scan(&fk.table, &fk.name, &fk.def); err != nil {
+				rows.Close()
+				return err
+			}
+			fks = append(fks, fk)
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return err
+		}
+		rows.Close()
+		for _, fk := range fks {
+			if _, err := tx.Exec(`ALTER TABLE ` + fk.table + ` DROP CONSTRAINT ` + fk.name); err != nil {
+				return err
+			}
+		}
+	} else {
+		if _, err := tx.Exec(`PRAGMA defer_foreign_keys=ON`); err != nil {
+			return err
+		}
+	}
+
+	stmts := []string{
+		`UPDATE projects SET name=? WHERE name=?`,
+		`UPDATE projects SET parent=? WHERE parent=?`,
+		`UPDATE role_bindings SET scope=? WHERE scope=?`,
+		`UPDATE role_bindings SET scope=? WHERE scope=?`,
+		`UPDATE groups SET name=? WHERE name=?`,
+	}
+	args := [][]any{
+		{newName, oldName},
+		{newName, oldName},
+		{newName, oldName},
+		{newName + "/*", oldName + "/*"},
+		{newName + " Owners", oldName + " Owners"},
+	}
+	for _, tbl := range projectRefTables {
+		stmts = append(stmts, `UPDATE `+tbl+` SET project=? WHERE project=?`)
+		args = append(args, []any{newName, oldName})
+	}
+	for i, q := range stmts {
+		if _, err := tx.Exec(q, args[i]...); err != nil {
+			return err
+		}
+	}
+
+	if d.driver == DriverPostgres {
+		for _, fk := range fks {
+			if _, err := tx.Exec(`ALTER TABLE ` + fk.table + ` ADD CONSTRAINT ` + fk.name + ` ` + fk.def); err != nil {
+				return err
+			}
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	d.perm.invalidateRules()
+	return nil
+}

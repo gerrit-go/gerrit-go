@@ -62,6 +62,10 @@ func (s *Server) publishNotifyEvent(c *store.Change, actorID int64, ev notify.Ev
 // a change or a new patch set.
 func (s *Server) onGitChangeEvent(changeNum int64, kind string) {
 	s.publishStreamEvent(changeNum, kind, nil, nil)
+	if kind == "patchset-created" {
+		// CI runs off-path: a slow or broken pipeline must never block a push.
+		go s.triggerCI(changeNum)
+	}
 }
 
 // streamEventJSON renders a StreamEvent as a Gerrit-compatible JSON object.

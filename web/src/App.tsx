@@ -1,5 +1,5 @@
 import { Link, NavLink, Route, Routes, useNavigate } from "react-router-dom";
-import { GitPullRequestArrow, FolderGit2, LogOut, Search, Sun, Moon, Monitor, Check, Users, LayoutDashboard, Settings, Languages, Menu, ShieldCheck, ScrollText } from "lucide-react";
+import { GitPullRequestArrow, FolderGit2, LogOut, Search, Sun, Moon, Monitor, Check, Users, UsersRound, LayoutDashboard, Settings, Languages, Menu, ShieldCheck, ScrollText, Building2 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useAuth } from "@/auth";
@@ -23,8 +23,10 @@ import SettingsPage from "@/pages/SettingsPage";
 import ProjectsPage from "@/pages/ProjectsPage";
 import ProjectDetailPage from "@/pages/ProjectDetailPage";
 import GroupsPage from "@/pages/GroupsPage";
+import TeamsPage from "@/pages/TeamsPage";
 import RolesPage from "@/pages/RolesPage";
 import AuditPage from "@/pages/AuditPage";
+import OrgPage from "@/pages/OrgPage";
 import LoginPage from "@/pages/LoginPage";
 import NotificationBell from "@/components/NotificationBell";
 import ShortcutsHelp from "@/components/ShortcutsHelp";
@@ -90,6 +92,8 @@ function MobileNav() {
     { to: "/", label: t("nav.changes"), icon: GitPullRequestArrow },
     { to: "/projects", label: t("nav.projects"), icon: FolderGit2 },
     ...(user ? [{ to: "/groups", label: t("nav.groups"), icon: Users }] : []),
+    ...(user ? [{ to: "/teams", label: t("nav.teams"), icon: UsersRound }] : []),
+    ...(user?.admin ? [{ to: "/organization", label: t("nav.organization"), icon: Building2 }] : []),
     ...(user?.admin ? [{ to: "/roles", label: t("nav.roles"), icon: ShieldCheck }] : []),
     ...(user?.admin ? [{ to: "/audit", label: t("nav.audit"), icon: ScrollText }] : []),
   ];
@@ -166,7 +170,7 @@ function Header() {
           <span className="hidden sm:inline">{t("brand")}</span>
         </Link>
         <MobileNav />
-        <nav className="hidden items-center gap-1 text-sm md:flex">
+        <nav className="hidden shrink-0 items-center gap-1 whitespace-nowrap text-sm md:flex">
           {user && (
             <NavLink
               to="/dashboard"
@@ -220,6 +224,34 @@ function Header() {
               {t("nav.groups")}
             </NavLink>
           )}
+          {user && (
+            <NavLink
+              to="/teams"
+              className={({ isActive }) =>
+                cn(
+                  "flex items-center gap-1.5 rounded-md px-3 py-1.5 text-muted-foreground transition-colors hover:text-foreground hover:bg-accent",
+                  isActive && "bg-accent text-foreground font-medium",
+                )
+              }
+            >
+              <UsersRound className="size-4" />
+              {t("nav.teams")}
+            </NavLink>
+          )}
+          {user?.admin && (
+            <NavLink
+              to="/organization"
+              className={({ isActive }) =>
+                cn(
+                  "flex items-center gap-1.5 rounded-md px-3 py-1.5 text-muted-foreground transition-colors hover:text-foreground hover:bg-accent",
+                  isActive && "bg-accent text-foreground font-medium",
+                )
+              }
+            >
+              <Building2 className="size-4" />
+              {t("nav.organization")}
+            </NavLink>
+          )}
         </nav>
         <form onSubmit={onSearch} className="ml-auto hidden w-full max-w-sm md:block">
           <div className="relative">
@@ -256,6 +288,18 @@ function Header() {
                   <Settings className="size-4" />
                   {t("action.settings")}
                 </DropdownMenuItem>
+                {user.admin && (
+                  <>
+                    <DropdownMenuItem onClick={() => navigate("/roles")}>
+                      <ShieldCheck className="size-4" />
+                      {t("nav.roles")}
+                    </DropdownMenuItem>
+                    <DropdownMenuItem onClick={() => navigate("/audit")}>
+                      <ScrollText className="size-4" />
+                      {t("nav.audit")}
+                    </DropdownMenuItem>
+                  </>
+                )}
                 <DropdownMenuItem
                   onClick={async () => {
                     await signOut();
@@ -329,8 +373,10 @@ export default function App() {
           <Route path="/projects" element={<ProjectsPage />} />
           <Route path="/projects/*" element={<ProjectDetailPage />} />
           <Route path="/groups" element={<GroupsPage />} />
+          <Route path="/teams" element={<TeamsPage />} />
           <Route path="/roles" element={<RolesPage />} />
           <Route path="/audit" element={<AuditPage />} />
+          <Route path="/organization" element={<OrgPage />} />
           <Route path="/c/:num" element={<ChangeDetailPage />} />
           <Route path="*" element={<NotFound />} />
         </Routes>

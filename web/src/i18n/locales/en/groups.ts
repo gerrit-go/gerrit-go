@@ -16,4 +16,8 @@ export default {
   memberPlaceholder: "alice",
   noMembers: "No members.",
   removeMemberAria: "Remove {{name}}",
+  toastGroupCreated: "Group created",
+  toastGroupDeleted: "Group deleted",
+  toastMemberAdded: "Added member {{name}}",
+  toastMemberRemoved: "Removed member {{name}}",
 };

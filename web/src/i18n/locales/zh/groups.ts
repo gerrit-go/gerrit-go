@@ -16,4 +16,8 @@ export default {
   memberPlaceholder: "alice",
   noMembers: "暂无成员。",
   removeMemberAria: "移除 {{name}}",
+  toastGroupCreated: "用户组已创建",
+  toastGroupDeleted: "用户组已删除",
+  toastMemberAdded: "已添加成员 {{name}}",
+  toastMemberRemoved: "已移除成员 {{name}}",
 };
